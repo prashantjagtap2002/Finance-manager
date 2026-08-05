@@ -1,0 +1,376 @@
+So what I want to do is I am sharing 1 project - "C:\Users\prash\AndroidStudioProjects\SmsWebhookForwarder"  just have a look and from this project I want the sms receiver code where it captures the sms when I receive one and implement this on my current project folder and it should capture all the sms and add 1 section where i can see the request like if I make the payment from kotak account it should show the amount received name and it account is mentioned then take the which bank I am making the transaction if not then allow the user to choose and there should be approved button on this page and I can choose from which Envelope Budgets it should count before approving and there should also be ignore button but it should goes to the botton under ignore section such that if i do it my mistake I can again do it un ignore kind off and also give the code as I want this data in my supabase also
+
+And can you also do 1 think I am sharing 1 json where I have added the logic and which I have created by scrapping my all sms so can you add a section where i can import my json in the app by using that I can get name of account and whether the amount is debited or credited 
+And I am also sharing the json for you to understand and add section where i can add this section and it should work properly 
+
+Here is the json code -
+// ============================================================
+// PRASHANT - BANK SMS PARSER (All 4 Accounts)
+// Handles: TJSB | SBI | Kotak | Amazon Pay
+// ============================================================
+
+const msg    = $input.item.json.body?.message || '';
+const sender = $input.item.json.body?.sender  || '';
+
+let account_name = '';
+let type         = '';   // 'credit' or 'debit'
+let amount       = '';
+let balance      = '';
+let counterparty = '';
+let reference    = '';
+
+const clean = (s) => (s || '').replace(/,/g, '');
+
+// ============================================================
+// 1. TJSB BANK
+//    Senders: JM-TJUPIS-S, JX-TJUPIS-S, VM-TJIMPS-S, VM-TJSBSB-S etc.
+// ============================================================
+if (sender.toUpperCase().includes('TJSB') || /TJSB Bank[. ]*$/.test(msg.trim())) {
+  account_name = 'TJSB';
+
+  // --- UPI CREDIT: "Rs.300.00 CREDITED to 0775" ---
+  if (msg.includes('CREDITED') && msg.match(/Rs\.\d/)) {
+    type = 'credit';
+    const amtM = msg.match(/Rs\.([\d,]+\.?\d*)\s+CREDITED/);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Avl BAL:Rs\.([\d,]+\.?\d*)/);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    const refM = msg.match(/Upi-([\d]+)-/);
+    reference = refM ? refM[1] : '';
+    const cpM = msg.match(/Upi-\d+-(.*?)-(?:UPI|Payment|Sent usi|Refund f|UPIInten|PayviaRa|scholars|yogesh m|Blinkit|UPIPAY)/);
+    counterparty = cpM ? cpM[1].trim() : '';
+  }
+
+  // --- UPI DEBIT: "Rs.100.00 DEBITED from 0775" ---
+  else if (msg.includes('DEBITED') && msg.match(/Rs\.\d/)) {
+    type = 'debit';
+    const amtM = msg.match(/Rs\.([\d,]+\.?\d*)\s+DEBITED/);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Avl BAL:Rs\.([\d,]+\.?\d*)/);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    const refM = msg.match(/Upi-([\d]+)-/);
+    reference = refM ? refM[1] : '';
+    const cpM = msg.match(/Upi-\d+-(.*?)-(?:Payment|Self tra|UPIInten|PayviaRa|Blinkit|UPIPAY|Nashik T|Refund f|Executio)/);
+    counterparty = cpM ? cpM[1].trim() : '';
+  }
+
+  // --- NEFT/CLEARING DEBIT: "Amount Rs. 1500.00 is Debited to your A/c no. XX0775 by Clearing IBNEFT/..." ---
+  else if (msg.match(/Amount Rs\.\s*[\d,]+\.?\d*\s+is Debited/i)) {
+    type = 'debit';
+    const amtM = msg.match(/Amount Rs\.\s*([\d,]+\.?\d*)\s+is Debited/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Bal:\s*([\d,]+\.?\d*)/);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    // NEFT: IBNEFT/REF/NAME/BANK  or  ADCCHG / CGST / SGST (charges)
+    const refM = msg.match(/(?:IBNEFT|NEFT)\/([A-Z0-9]+)\//i);
+    reference = refM ? refM[1] : '';
+    const cpM = msg.match(/(?:IBNEFT|NEFT)\/[^/]+\/([^/]+)\//i);
+    counterparty = cpM ? cpM[1].trim() : msg.match(/by (?:Clearing|Transfer)\s+(.+?)\./)?.[1]?.trim() || '';
+  }
+
+  // --- NEFT/CLEARING CREDIT: "Amount Rs. 16100.00 is Credited to your A/c no. XX0775 by Clearing NEFT/..." ---
+  else if (msg.match(/Amount Rs\.\s*[\d,]+\.?\d*\s+is Credited/i)) {
+    type = 'credit';
+    const amtM = msg.match(/Amount Rs\.\s*([\d,]+\.?\d*)\s+is Credited/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Bal:\s*([\d,]+\.?\d*)/);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    const refM = msg.match(/NEFT\/[^/]+\/([A-Z0-9]+)\//i);
+    reference = refM ? refM[1] : '';
+    const cpM = msg.match(/NEFT\/([^/]+)\//i);
+    counterparty = cpM ? cpM[1].trim() : 'NEFT Credit';
+  }
+
+  // --- IMPS DEBIT: "Your a/c no.XX0775 is debited for Rs.2000.00/-" ---
+  else if (msg.match(/is debited for Rs\./i)) {
+    type = 'debit';
+    const amtM = msg.match(/debited for Rs\.([\d,]+\.?\d*)\/-/);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/IMPS Ref no (\d+)/);
+    reference = refM ? refM[1] : '';
+    counterparty = 'Self Transfer (IMPS)';
+  }
+
+  // --- IMPS CREDIT: "Your a/c no. XX0775 is credited by Rs.14000.00 on 06-01-26 (IMPS Ref no ...)" ---
+  else if (msg.match(/is credited by Rs\./i)) {
+    type = 'credit';
+    const amtM = msg.match(/credited by Rs\.([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/IMPS Ref no (\d+)/);
+    reference = refM ? refM[1] : '';
+    counterparty = 'IMPS Credit';
+  }
+}
+
+// ============================================================
+// 2. SBI (State Bank of India)
+//    All messages end with: "-SBI"
+//    Senders: VA-SBIUPI, JK-SBIUPI, BW-SBIUPI, VM-CBSSBI, etc.
+// ============================================================
+else if (msg.endsWith('-SBI') || msg.includes('.-SBI') || sender.toUpperCase().includes('SBI')) {
+  account_name = 'SBI';
+
+  // --- CREDIT (CDM/Transfer): "A/C XXXXX348914 Credited INR 450.00" ---
+  if (msg.match(/Credited INR/i)) {
+    type = 'credit';
+    const amtM = msg.match(/Credited INR ([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Avl Bal INR ([\d,]+\.?\d*)/i);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    const cpM = msg.match(/-(?:Deposit|Credit) (?:by transfer |of Cash )?(?:at [\w]+ )?(?:from (.+?))?\. Avl/i);
+    counterparty = cpM?.[1]?.trim() || 'CDM/Transfer';
+  }
+
+  // --- CREDIT (NEFT): "INR X.XX credited to your A/c No XX8914 on DD/MM/YYYY through NEFT" ---
+  else if (msg.match(/credited to your A\/c/i) && msg.match(/NEFT/i)) {
+    type = 'credit';
+    const amtM = msg.match(/INR ([\d,]+\.?\d*) credited/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/UTR (\w+)/);
+    reference = refM ? refM[1] : '';
+    const cpM = msg.match(/by (.+?) -SBI/i);
+    counterparty = cpM ? cpM[1].trim() : 'NEFT Credit';
+  }
+
+  // --- CREDIT (IMPS): "a/c no. XXXXXXXX8914 is credited by Rs.1.00 on 01-10-21 by a/c linked to mobile" ---
+  else if (msg.match(/is credited by Rs\./i)) {
+    type = 'credit';
+    const amtM = msg.match(/credited by Rs\.([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/IMPS Ref no (\d+)/);
+    reference = refM ? refM[1] : '';
+    const cpM = msg.match(/mobile [\dX]+-(.+?) \(/);
+    counterparty = cpM ? cpM[1].trim() : 'IMPS Credit';
+  }
+
+  // --- CREDIT (UPI short): "ur A/cX8914 credited by Rs25 on 28Jun22 by (Ref no...)" ---
+  else if (msg.match(/ur A\/c\w+ credited by Rs/i)) {
+    type = 'credit';
+    const amtM = msg.match(/credited by Rs([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/Ref no (\d+)/);
+    reference = refM ? refM[1] : '';
+    counterparty = 'UPI Credit';
+  }
+
+  // --- CREDIT (new format Aug 2024+): "Dear SBI User, your A/c X8914-credited by Rs.195 on 28Aug24 transfer from NAME" ---
+  else if (msg.match(/A\/c \w+-credited by Rs\./i)) {
+    type = 'credit';
+    const amtM = msg.match(/credited by Rs\.([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/Ref No (\d+)/i);
+    reference = refM ? refM[1] : '';
+    const cpM = msg.match(/transfer from (.+?) Ref No/i);
+    counterparty = cpM ? cpM[1].trim() : 'UPI Credit';
+  }
+
+  // --- CREDIT (AEPS): "credited with Rs. 220.0 dated" ---
+  else if (msg.match(/credited with Rs\./i)) {
+    type = 'credit';
+    const amtM = msg.match(/credited with Rs\.\s*([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/RRN (\d+)/);
+    reference = refM ? refM[1] : '';
+    counterparty = 'AEPS Cash Deposit';
+  }
+
+  // --- DEBIT (Transfer): "has a debit by transfer of Rs 213.00" ---
+  else if (msg.match(/has a debit by transfer/i)) {
+    type = 'debit';
+    const amtM = msg.match(/transfer of Rs ([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Avl Bal Rs ([\d,]+\.?\d*)/i);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+  }
+
+  // --- DEBIT (UPI long, new): "A/C X8914 debited by 37.0 on date 23Jul24 trf to MERCHANT Refno" ---
+  else if (msg.match(/debited by [\d.]+ on date/i)) {
+    type = 'debit';
+    const amtM = msg.match(/debited by ([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/Refno (\d+)/i);
+    reference = refM ? refM[1] : '';
+    const cpM = msg.match(/trf to (.+?) Refno/i);
+    counterparty = cpM ? cpM[1].trim() : '';
+  }
+
+  // --- DEBIT (new format Aug 2024+): "Dear SBI User, your A/c X8914-debited by Rs10.0 on 13Apr22 transfer to NAME" ---
+  else if (msg.match(/A\/c \w+-debited by Rs/i)) {
+    type = 'debit';
+    const amtM = msg.match(/debited by Rs([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/Ref No (\d+)/i);
+    reference = refM ? refM[1] : '';
+    const cpM = msg.match(/transfer to (.+?) Ref No/i);
+    counterparty = cpM ? cpM[1].trim() : '';
+  }
+
+  // --- DEBIT (UPI old short): "Rs1.0 debited@SBI UPI frm A/cX8914 on 31Oct21 RefNo" ---
+  else if (msg.match(/debited@SBI UPI/i) || msg.match(/debited¡SBI UPI|debitedàSBI UPI|debited SBI UPI/i)) {
+    type = 'debit';
+    const amtM = msg.match(/Rs([\d,]+\.?\d*) debited/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/RefNo (\d+)/);
+    reference = refM ? refM[1] : '';
+  }
+
+  // --- DEBIT (NACH/EMI): "has a debit by NACH of Rs 500.00" ---
+  else if (msg.match(/debit by NACH/i)) {
+    type = 'debit';
+    const amtM = msg.match(/NACH of Rs ([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Avl Bal Rs ([\d,]+\.?\d*)/i);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    counterparty = 'NACH/EMI Auto Debit';
+  }
+}
+
+// ============================================================
+// 3. KOTAK BANK
+//    Senders: VM-KOTAKB, AD-KOTAKB, JM-KOTAKB-S etc.
+// ============================================================
+else if (msg.includes('Kotak Bank') || sender.toUpperCase().includes('KOTAK')) {
+  account_name = 'Kotak';
+
+  // --- UPI CREDIT: "Received Rs.100.00 in your Kotak Bank AC X2769 from..." ---
+  if (msg.match(/^Received Rs\./m)) {
+    type = 'credit';
+    const amtM = msg.match(/Received Rs\.([\d,]+\.?\d*)/);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Bal:([\d,]+\.?\d*)/);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    const cpM = msg.match(/from ([^\s]+) on/);
+    counterparty = cpM ? cpM[1] : '';
+    const refM = msg.match(/UPI Ref[:\s]?(\d+)/);
+    reference = refM ? refM[1] : '';
+  }
+
+  // --- IMPS CREDIT: "Received Rs. 2000.00 on 04-10-25 in your Kotak Bank A/C x2769 by an A/C linked to mobile x281. IMPS Ref no..." ---
+  else if (msg.match(/Received Rs\.\s*[\d,]+/) && msg.match(/IMPS Ref no/i)) {
+    type = 'credit';
+    const amtM = msg.match(/Received Rs\.\s*([\d,]+\.?\d*)/);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/IMPS Ref no (\d+)/i);
+    reference = refM ? refM[1] : '';
+    counterparty = 'IMPS Credit';
+  }
+
+  // --- REVERSAL CREDIT: "Rs.500.00 is credited to Kotak Bank a/c no. 2769 as a reversal..." ---
+  else if (msg.match(/is credited to Kotak Bank/i)) {
+    type = 'credit';
+    const amtM = msg.match(/Rs\.([\d,]+\.?\d*) is credited/);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/UPI Ref no (\d+)/i);
+    reference = refM ? refM[1] : '';
+    counterparty = 'UPI Reversal';
+  }
+
+  // --- UPI DEBIT: "Sent Rs.800.00 from Kotak Bank AC XXXX2769 to recipient on..." ---
+  else if (msg.match(/^Sent Rs\./m)) {
+    type = 'debit';
+    const amtM = msg.match(/Sent Rs\.([\d,]+\.?\d*)/);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Bal:([\d,]+\.?\d*)/);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    const cpM = msg.match(/to ([^\s]+) on/);
+    counterparty = cpM ? cpM[1] : '';
+    const refM = msg.match(/UPI Ref (\d+)/);
+    reference = refM ? refM[1] : '';
+  }
+
+  // --- ATM DEBIT: "INR 10000.00 is debited from your A/c XXXX2769 on ... towards CASH WITHDRAWAL" ---
+  else if (msg.match(/INR [\d,.]+ is debited from/i)) {
+    type = 'debit';
+    const amtM = msg.match(/INR ([\d,]+\.?\d*) is debited/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/(?:Combined )?Available Balance is INR ([\d,]+\.?\d*)/i);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    const cpM = msg.match(/towards (.+?)\./);
+    counterparty = cpM ? cpM[1].trim() : 'ATM/POS Debit';
+  }
+
+  // --- NACH/EMI DEBIT: "INR 400.00 is debited to your Account XXXXXX2769 on ... towards NACH-MUT-..." ---
+  else if (msg.match(/INR [\d,.]+ is debited to your Account/i)) {
+    type = 'debit';
+    const amtM = msg.match(/INR ([\d,]+\.?\d*) is debited/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const cpM = msg.match(/towards (.+?) Kotak Bank/i);
+    counterparty = cpM ? cpM[1].trim() : 'NACH/EMI Auto Debit';
+  }
+}
+
+// ============================================================
+// 4. AMAZON PAY / JUSPAY
+//    Senders: AX-JUSPAY, CP-JUSPAY-S, +9157575109, 575754 etc.
+// ============================================================
+else if (
+  sender.includes('57575') ||
+  sender === '575754'      ||
+  sender.toUpperCase().includes('JUSPAY') ||
+  msg.toLowerCase().includes('apay wallet')
+) {
+  account_name = 'Amazon Pay';
+
+  // --- CREDIT (Add Money): "Rs 200.00 added to Amazon Pay balance" ---
+  if (msg.match(/added to Amazon Pay/i)) {
+    type = 'credit';
+    const amtM = msg.match(/Rs ?\.?([\d,]+\.?\d*) added/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/(?:Updated )?Balance:?\s*(?:Rs\.?)?\s*([\d,]+\.?\d*)/i);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    counterparty = 'Wallet Top-Up';
+  }
+
+  // --- DEBIT (Juspay): "Your Apay Wallet balance is debited for INR 200.00. Transaction Reference Number..." ---
+  else if (msg.match(/Apay Wallet balance is debited for INR/i)) {
+    type = 'debit';
+    const amtM = msg.match(/debited for INR ([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const refM = msg.match(/(?:Transaction )?Reference Number(?:\s+is)?\s+(\d+)/i);
+    reference = refM ? refM[1] : '';
+    counterparty = 'Amazon Pay Wallet';
+  }
+
+  // --- DEBIT (Juspay summary): "Payment of Rs 351.48 using Apay Balance successful at merchant. Updated Balance: Rs148.74" ---
+  else if (msg.match(/using Apay Balance successful/i)) {
+    type = 'debit';
+    const amtM = msg.match(/Payment of Rs ([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/(?:Updated )?Balance(?:\s+is)?\s+Rs\s*([\d,]+\.?\d*)/i);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    counterparty = 'Amazon Pay Purchase';
+  }
+
+  // --- DEBIT (direct +9157 sender): "Payment of Rs 126.08 using Amazon Pay Balance is successful at IRCTC." ---
+  else if (msg.match(/using Amazon Pay Balance is successful/i)) {
+    type = 'debit';
+    const amtM = msg.match(/Payment of Rs ([\d,]+\.?\d*)/i);
+    amount = amtM ? 'Rs.' + clean(amtM[1]) : '';
+    const balM = msg.match(/Updated Balance:\s*Rs ([\d,]+\.?\d*)/i);
+    balance = balM ? 'Rs.' + clean(balM[1]) : '';
+    const cpM = msg.match(/successful at (.+?)\./);
+    counterparty = cpM ? cpM[1].trim() : 'Amazon Pay Purchase';
+  }
+}
+
+// ============================================================
+// Guard: OTP/alert/notification SMS — no type means not a transaction
+// ============================================================
+if (!type) account_name = '';
+
+// ============================================================
+// Return parsed data to next node
+// ============================================================
+return {
+  json: {
+    timestamp:    $now.setZone('Asia/Kolkata').toFormat('dd LLL yyyy, hh:mm a'),
+    account_name,
+    type,
+    amount,
+    balance,
+    counterparty,
+    reference,
+    raw_sender:   sender,
+    raw_message:  msg
+  }
+};

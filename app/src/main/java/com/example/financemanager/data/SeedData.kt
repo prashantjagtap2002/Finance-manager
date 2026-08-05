@@ -1,0 +1,57 @@
+package com.example.financemanager.data
+
+object SeedData {
+    val CSV_DATA = """Timestamp,Account Name,Status,Amount,Balance,Name of Receiver,Reference
+"01 Jul 2026, 6:06 AM",TJSB,credited,Rs.69.00,Rs.11051.69,NEFT Credit,
+"01 Jul 2026, 7:16 AM",Kotak,credited,Rs.2000.00,,8421029615@ybl,955723758434
+"01 Jul 2026, 8:58 AM",TJSB,debited,Rs.126.10,Rs.10925.59,Indian Railway,410013153599
+"01 Jul 2026, 9:00 AM",TJSB,debited,Rs.27.60,Rs.10897.99,,321420073186
+"01 Jul 2026, 9:00 AM",TJSB,debited,Rs.27.60,Rs.10897.99,,321420073186
+"01 Jul 2026, 11:02 AM",TJSB,debited,Rs.20.00,Rs.10877.99,JAGANATHA MAHA,799036475314
+"01 Jul 2026, 7:36 PM",TJSB,debited,Rs.20.00,Rs.10857.99,JAGANATHA MAHA,492362379020
+"01 Jul 2026, 7:53 PM",TJSB,debited,Rs.27.60,Rs.10830.39,,456110852375
+"01 Jul 2026, 8:58 PM",TJSB,debited,Rs.30.00,Rs.10800.39,RAJESH MAHADEV,112176696891
+"02 Jul 2026, 7:50 AM",Kotak,debited,Rs.1930.00,,bflautopay@hdfcbank,103572607630
+"02 Jul 2026, 9:33 AM",TJSB,debited,Rs.30.00,Rs.10770.39,KOLI JAYESH BH,396450128819
+"02 Jul 2026, 10:04 AM",TJSB,debited,Rs.27.60,Rs.10742.79,,396398720894
+"02 Jul 2026, 10:05 AM",TJSB,debited,Rs.27.60,Rs.10715.19,,444716754098
+"02 Jul 2026, 10:13 AM",Kotak,credited,Rs.3000.00,,smarakikar1@oksbi,618315625557
+"02 Jul 2026, 1:53 PM",TJSB,debited,Rs.20.00,Rs.10695.19,SIDDHIVINAYAK,110213963826
+"02 Jul 2026, 5:02 PM",TJSB,debited,Rs.20.00,Rs.10675.19,RAGHAVENDRA RA,858177331631
+"02 Jul 2026, 10:18 PM",TJSB,debited,Rs.1000.00,Rs.9675.19,URMILA DILIP J,693238298684
+"03 Jul 2026, 7:21 AM",TJSB,debited,Rs.735.00,Rs.8940.19,FLIPKART PAYME,938020919005
+"03 Jul 2026, 10:18 AM",TJSB,debited,Rs.27.60,Rs.8912.59,,212110859662
+"03 Jul 2026, 10:18 AM",TJSB,debited,Rs.27.60,Rs.8884.99,,665888917823
+"03 Jul 2026, 10:55 AM",TJSB,debited,Rs.20.00,Rs.8864.99,DUBEY PAN BIDI,939041449164
+"03 Jul 2026, 12:28 PM",Kotak,credited,Rs.170.00,,veeranshkeshwani@okaxis,618461310774
+"03 Jul 2026, 6:31 PM",TJSB,debited,Rs.20.00,Rs.8489.99,RAGHAVENDRA RA,373618226803
+"03 Jul 2026, 7:56 PM",Kotak,debited,Rs.170.00,,110100000320775@tjsb0000158.ifsc.npci,618488131170
+"03 Jul 2026, 8:51 PM",TJSB,debited,Rs.375.00,Rs.8284.99,LAXMI NOVELTY,124313459089
+"03 Jul 2026, 8:53 PM",TJSB,debited,Rs.20.00,Rs.8264.99,ARUN HANUMANT,3280310346
+"04 Jul 2026, 6:39 PM",TJSB,debited,Rs.66.00,Rs.8198.99,CITY DAIRY,610983807131
+"04 Jul 2026, 6:41 PM",TJSB,debited,Rs.25.00,Rs.8173.99,SHREE KRISHNA,529671734447
+"04 Jul 2026, 6:56 PM",TJSB,credited,Rs.3000.00,Rs.11173.99,PRASHANT DILIP,655123555308
+"04 Jul 2026, 6:57 PM",Kotak,debited,Rs.3000.00,,110100000320775@tjsb0000158.ifsc.npci,655123555308
+"04 Jul 2026, 9:48 PM",Kotak,debited,Rs.22.00,,paytmqr6yiuee@ptys,655175243603
+"05 Jul 2026, 10:55 AM",Kotak,debited,Rs.50.00,,q223635342@ybl,655204779695
+"05 Jul 2026, 7:20 PM",TJSB,debited,Rs.899.00,Rs.10274.99,Jio Prepaid Re,67384812091
+"05 Jul 2026, 10:06 PM",Kotak,debited,Rs.22.00,,paytmqr72nuq8@ptys,618662557652
+"06 Jul 2026, 12:35 PM",TJSB,credited,Rs.20000.00,Rs.30274.99,FIAXE,50200116541077
+"06 Jul 2026, 4:06 PM",Kotak,credited,Rs.60.00,,aanuragtiwari10a@okhdfcbank,125851277810
+"06 Jul 2026, 10:06 PM",Kotak,debited,Rs.22.00,,paytmqr6yiuee@ptys,655367052517
+"06 Jul 2026, 10:09 PM",Kotak,debited,Rs.1.00,,paytmqr6yiuee@ptys,655340740952
+"07 Jul 2026, 9:51 AM",Kotak,credited,Rs.274.00,,9326321281@ybl,173051562544
+"07 Jul 2026, 9:52 AM",Kotak,debited,Rs.27.60,,uber1.rzp@hdfcbank,655448258456
+"07 Jul 2026, 9:53 AM",Kotak,debited,Rs.27.60,,uber1.rzp@hdfcbank,655491059670
+"07 Jul 2026, 10:54 AM",Kotak,debited,Rs.18.00,,q693214107@ybl,655490692622
+"07 Jul 2026, 5:18 PM",Kotak,debited,Rs.20.00,,q693214107@ybl,618899720192
+"07 Jul 2026, 8:31 PM",Kotak,debited,Rs.20.00,,paytmqr6i4hhc@ptys,618886933204
+"07 Jul 2026, 9:12 PM",Kotak,credited,Rs.4000.00,,9326321281@ybl,219407191371
+"08 Jul 2026, 8:09 AM",Kotak,debited,Rs.2000.00,,groww.iccl1.brk@validhdfc,655571208612
+"08 Jul 2026, 8:09 AM",Kotak,debited,Rs.600.00,,groww.iccl1.brk@validhdfc,655571213603
+"08 Jul 2026, 8:09 AM",Kotak,debited,Rs.1400.00,,groww.iccl1.brk@validhdfc,655571216977
+"08 Jul 2026, 9:59 AM",Kotak,debited,Rs.20.00,,paytm.s1vonuu@pty,618972283102
+"08 Jul 2026, 10:11 AM",Kotak,debited,Rs.21.00,,uber1.rzp@hdfcbank,618928880645
+"08 Jul 2026, 10:12 AM",Kotak,debited,Rs.21.00,,uber1.rzp@hdfcbank,618981786373
+"08 Jul 2026, 11:02 AM",Kotak,debited,Rs.21.00,,uber1.rzp@hdfcbank,618981786373"""
+}
