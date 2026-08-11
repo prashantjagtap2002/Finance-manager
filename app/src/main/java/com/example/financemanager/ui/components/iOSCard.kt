@@ -11,31 +11,30 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import com.example.financemanager.theme.iOSSecondaryBackgroundDark
-import com.example.financemanager.theme.iOSSecondaryBackgroundLight
-import com.example.financemanager.theme.iOSSeparatorDark
-import com.example.financemanager.theme.iOSSeparatorLight
-import com.example.financemanager.theme.iOSTertiaryBackgroundDark
-import com.example.financemanager.theme.iOSTextPrimaryDark
-import com.example.financemanager.theme.iOSTextPrimaryLight
-import com.example.financemanager.theme.iOSRadiusMedium
+import com.example.financemanager.theme.BorderColor
+import com.example.financemanager.theme.CompactRadius
+import com.example.financemanager.theme.DarkSurface
 import com.example.financemanager.theme.LocalThemeIsDark
+import com.example.financemanager.theme.SubtleSurface
+import com.example.financemanager.theme.TextPrimary
 
 /**
- * iOS-style Card component following Apple's InsetGrouped design pattern.
+ * The single container primitive for the app.
  *
- * Commonly used in iOS apps like Settings, Mail, and Music.
- * Provides rounded containers with subtle separators between items.
+ * Cards are flat: one surface colour, one hairline border, one radius. Depth
+ * comes from the border and the step in lightness against the canvas, never
+ * from shadows — a drop shadow on a near-black background just reads as mud.
  *
  * Styles:
- * - Plain: No background, minimal borders (rarely used)
- * - Grouped: InsetGrouped style with rounded corners and subtle background (PRIMARY)
- * - Elevated: Subtle shadow (rare in iOS, use sparingly)
+ * - Plain: no chrome at all, for grouping without a visible box
+ * - Grouped: the default surface card
+ * - Elevated: same surface, slightly stronger border for the one card on a
+ *   screen that should pull focus
  */
 enum class iOSCardStyle {
-    Plain,      // No background, minimal borders
-    Grouped,    // InsetGrouped style with rounded corners
-    Elevated    // Subtle shadow (rare use)
+    Plain,
+    Grouped,
+    Elevated
 }
 
 @Composable
@@ -45,52 +44,43 @@ fun iOSCard(
     content: @Composable ColumnScope.() -> Unit
 ) {
     val isDark = LocalThemeIsDark.current
+    val surface = DarkSurface
+    val hairline = BorderColor
 
-    val cardSpec = when (style) {
-        iOSCardStyle.Plain -> Triple(Color.Transparent, Color.Transparent, 0.dp)
-        iOSCardStyle.Grouped -> Triple(
-            if (isDark) iOSSecondaryBackgroundDark else iOSSecondaryBackgroundLight,
-            if (isDark) iOSSeparatorDark else iOSSeparatorLight,
-            0.dp
-        )
-        iOSCardStyle.Elevated -> Triple(
-            if (isDark) iOSTertiaryBackgroundDark else Color.White,
-            Color.Transparent,
-            2.dp
-        )
+    val (backgroundColor, borderColor) = when (style) {
+        iOSCardStyle.Plain -> Color.Transparent to Color.Transparent
+        iOSCardStyle.Grouped -> surface to hairline
+        // Emphasis reads as "lighter" on a dark canvas and as "more defined"
+        // on a light one, so it is not the same move in both themes.
+        iOSCardStyle.Elevated ->
+            if (isDark) SubtleSurface to hairline
+            else surface to Color(0xFFD6DAE1)
     }
-
-    val (backgroundColor, borderColor, elevation) = cardSpec
 
     Surface(
         modifier = modifier,
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(CompactRadius),
         color = backgroundColor,
-        contentColor = if (isDark) iOSTextPrimaryDark else iOSTextPrimaryLight,
+        contentColor = TextPrimary,
         tonalElevation = 0.dp,
-        shadowElevation = elevation,
-        border = null
+        shadowElevation = 0.dp,
+        border = if (borderColor == Color.Transparent) null else BorderStroke(1.dp, borderColor)
     ) {
         Column(content = content)
     }
 }
 
 /**
- * iOS-style list separator following Apple's InsetGrouped pattern.
- *
- * Creates a subtle horizontal divider that is inset from the left edge
- * (16dp inset) matching iOS list separator appearance.
+ * Hairline divider between rows inside a card, inset to line up with the text
+ * column rather than cutting the card edge to edge.
  */
 @Composable
 fun iOSListSeparator(
     modifier: Modifier = Modifier
 ) {
-    val isDark = LocalThemeIsDark.current
-    val separatorColor = if (isDark) iOSSeparatorDark else iOSSeparatorLight
-
     HorizontalDivider(
-        color = separatorColor,
-        thickness = 0.5.dp,
+        color = BorderColor,
+        thickness = 1.dp,
         modifier = modifier.padding(start = 16.dp)
     )
 }

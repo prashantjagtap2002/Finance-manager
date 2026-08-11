@@ -112,39 +112,97 @@ fun DebtScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Summary Header
+            // Summary Header Cards
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("People owe you", style = Typography.labelMedium.copy(color = TextSecondary))
-                    Text(moneyString(totalToReceive, false), style = Typography.titleMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold))
+                iOSCard(
+                    modifier = Modifier.weight(1f),
+                    style = iOSCardStyle.Grouped
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(AccentGreen.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(12.dp))
+                            }
+                            Text("Owed to You", style = Typography.labelSmall.copy(color = TextSecondary))
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(moneyString(totalToReceive, false), style = Typography.titleMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold))
+                    }
                 }
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("You owe", style = Typography.labelMedium.copy(color = TextSecondary))
-                    Text(moneyString(totalToPay, false), style = Typography.titleMedium.copy(color = AlertRed, fontWeight = FontWeight.Bold))
+
+                iOSCard(
+                    modifier = Modifier.weight(1f),
+                    style = iOSCardStyle.Grouped
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .clip(CircleShape)
+                                    .background(AlertRed.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = AlertRed, modifier = Modifier.size(12.dp))
+                            }
+                            Text("You Owe", style = Typography.labelSmall.copy(color = TextSecondary))
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(moneyString(totalToPay, false), style = Typography.titleMedium.copy(color = AlertRed, fontWeight = FontWeight.Bold))
+                    }
                 }
             }
 
-            // Tabs
-            SecondaryTabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = DeepBackground,
-                contentColor = TextPrimary
+            // iOS Segmented Control Tabs
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(SubtleSurface)
+                    .padding(4.dp)
             ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("Owe Me", style = Typography.labelLarge) }
-                )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("I Owe", style = Typography.labelLarge) }
-                )
+                val oweMeCount = debts.count { it.type == DebtType.LENT && !it.isSettled }
+                val iOweCount = debts.count { it.type == DebtType.BORROWED && !it.isSettled }
+
+                listOf("Owe Me ($oweMeCount)" to 0, "I Owe ($iOweCount)" to 1).forEach { (label, index) ->
+                    val isSelected = selectedTab == index
+                    val bg by androidx.compose.animation.animateColorAsState(
+                        targetValue = if (isSelected) PrimaryViolet else Color.Transparent,
+                        animationSpec = androidx.compose.animation.core.spring(dampingRatio = 0.7f, stiffness = 300f),
+                        label = "tab_bg"
+                    )
+                    val textCol by androidx.compose.animation.animateColorAsState(
+                        targetValue = if (isSelected) OnAccent else TextSecondary,
+                        label = "tab_text"
+                    )
+
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(bg)
+                            .clickable { selectedTab = index }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            label,
+                            style = Typography.labelMedium.copy(color = textCol, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium)
+                        )
+                    }
+                }
             }
 
             // List
@@ -199,7 +257,7 @@ fun DebtScreen(
                                         ) {
                                             Text(
                                                 displayName.take(1).uppercase(),
-                                                color = DeepBackground,
+                                                color = OnAccent,
                                                 fontWeight = FontWeight.Bold
                                             )
                                         }

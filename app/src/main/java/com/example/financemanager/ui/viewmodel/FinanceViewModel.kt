@@ -46,6 +46,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     // Spending for the CURRENT calendar month only (total + per category)
     val monthlyExpenseTotal: StateFlow<Double>
+    val monthlyIncomeTotal: StateFlow<Double>
     val monthlyCategorySpend: StateFlow<Map<Long, Double>>
 
     // Consecutive days (ending today or yesterday) with at least one logged transaction
@@ -165,6 +166,14 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             .map { txList ->
                 val (start, end) = currentPayCycleRange()
                 txList.filter { it.type == TransactionType.EXPENSE && it.date in start..end }
+                    .sumOf { it.amount }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+        monthlyIncomeTotal = repository.transactions
+            .map { txList ->
+                val (start, end) = currentPayCycleRange()
+                txList.filter { it.type == TransactionType.INCOME && it.date in start..end }
                     .sumOf { it.amount }
             }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
@@ -860,7 +869,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             repository.deleteTransaction(transaction)
             
             // Revert source account balance impact
-            val account = repository.getAccountById(transaction.sourceAccountId)
+            val currentAccounts = accounts.value
+            val account = currentAccounts.firstOrNull { it.id == transaction.sourceAccountId }
+                ?: currentAccounts.firstOrNull()
+
             if (account != null) {
                 val revertedBalance = when (transaction.type) {
                     TransactionType.EXPENSE, TransactionType.TRANSFER -> account.balance + transaction.amount
@@ -871,11 +883,13 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
             // Revert destination account balance impact if transfer
             if (transaction.type == TransactionType.TRANSFER && transaction.destinationAccountId != null) {
-                val destAccount = repository.getAccountById(transaction.destinationAccountId)
+                val destAccount = currentAccounts.firstOrNull { it.id == transaction.destinationAccountId }
                 if (destAccount != null) {
                     repository.updateAccount(destAccount.copy(balance = destAccount.balance - transaction.amount))
                 }
             }
+
+            SyncWorker.enqueueNow(getApplication())
         }
     }
 
@@ -1644,6 +1658,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun deleteSmsTransaction(smsTransaction: SmsTransaction) {
         viewModelScope.launch {
             repository.deleteSmsTransaction(smsTransaction)
+            val primaryAccount = accounts.value.firstOrNull()
+            val parsedAmt = smsTransaction.amount.toDoubleOrNull() ?: 0.0
+            if (primaryAccount != null && parsedAmt > 0) {
+                repository.updateAccount(primaryAccount.copy(balance = primaryAccount.balance + parsedAmt))
+            }
             SyncWorker.enqueueNow(getApplication())
         }
     }

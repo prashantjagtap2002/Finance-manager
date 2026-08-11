@@ -11,7 +11,7 @@ import androidx.room.migration.Migration;
 
 @Database(
     entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class},
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 @TypeConverters({Converters.class})
@@ -124,6 +124,24 @@ public abstract class FinanceDatabase extends RoomDatabase {
         }
     };
 
+    // Enforces uniqueness of smsHash so OnConflictStrategy.IGNORE in
+    // FinanceDao#insertSmsTransaction actually prevents duplicate SMS rows (previously the
+    // column had no constraint backing it, so the same SMS delivered twice — e.g. via both
+    // SMS_RECEIVED and SMS_DELIVER broadcasts — created duplicate pending transactions).
+    // Existing duplicate rows are collapsed to the earliest one before the index is created,
+    // since CREATE UNIQUE INDEX fails if duplicates already exist.
+    static final Migration MIGRATION_11_12 = new Migration(11, 12) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "DELETE FROM sms_transactions WHERE id NOT IN (SELECT MIN(id) FROM sms_transactions GROUP BY smsHash)"
+            );
+            database.execSQL(
+                "CREATE UNIQUE INDEX IF NOT EXISTS index_sms_transactions_smsHash ON sms_transactions(smsHash)"
+            );
+        }
+    };
+
     public static FinanceDatabase getDatabase(final Context context, final kotlinx.coroutines.CoroutineScope scope) {
         if (INSTANCE == null) {
             synchronized (FinanceDatabase.class) {
@@ -133,7 +151,7 @@ public abstract class FinanceDatabase extends RoomDatabase {
                         FinanceDatabase.class,
                         "finance_database"
                     )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
                     .addCallback(new RoomDatabase.Callback() {
                         @Override
                         public void onCreate(@NonNull SupportSQLiteDatabase db) {

@@ -31,7 +31,9 @@ import com.example.financemanager.services.NotificationHelper
 import com.example.financemanager.theme.FinanceManagerTheme
 import com.example.financemanager.ui.screens.OnboardingScreen
 import java.util.concurrent.Executor
+import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.NetworkType
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.example.financemanager.services.RecurringTransactionWorker
@@ -71,7 +73,9 @@ class MainActivity : FragmentActivity() {
         )
 
         // Initialize Cloud Sync Worker
-        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(12, TimeUnit.HOURS).build()
+        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(12, TimeUnit.HOURS)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "CloudSyncWorker",
             ExistingPeriodicWorkPolicy.KEEP,
@@ -164,11 +168,27 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun triggerBiometricUnlock() {
+        val biometricManager = BiometricManager.from(this)
+        val canAuthenticate = biometricManager.canAuthenticate(
+            BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        )
+        if (canAuthenticate == BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE ||
+            canAuthenticate == BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE ||
+            canAuthenticate == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
+        ) {
+            // No biometric/device credential is configured on this device at all, so there is
+            // nothing an app-level lock can meaningfully protect against here. Unlock rather
+            // than permanently locking the user out with no way to authenticate.
+            isUnlockedState.value = true
+            return
+        }
         try {
             biometricPrompt.authenticate(promptInfo)
         } catch (e: Exception) {
-            // Fallback for emulators/devices without screen lock configured
-            isUnlockedState.value = true
+            // Do NOT unlock here: authenticate() throwing is not proof the device has no lock
+            // configured (that case is already handled above). Fail closed and let the user
+            // retry via the "Unlock App" button.
+            Toast.makeText(applicationContext, "Unable to start authentication: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 }
@@ -205,7 +225,7 @@ fun BiometricLockScreen(onUnlockClick: () -> Unit) {
         Text(
             text = "Please authenticate to access your transactions",
             style = MaterialTheme.typography.bodyMedium,
-            color = Color.Gray
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(modifier = Modifier.height(48.dp))
         Button(

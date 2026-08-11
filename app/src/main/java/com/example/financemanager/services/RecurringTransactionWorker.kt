@@ -34,28 +34,39 @@ class RecurringTransactionWorker(
 
                 if (rt.nextExecutionDate <= now) {
                     if (rt.isAutoLog) {
-                        // It's due! Create a real transaction
-                        val tx = Transaction(
+                        // Guard against double-applying: FinanceViewModel also runs
+                        // RecurringScheduler on every app open, which can race this worker
+                        // for the same due recurring transaction. Skip if already logged.
+                        val existing = dao.findDuplicateTransaction(
                             amount = rt.amount,
-                            type = rt.type,
+                            type = rt.type.name,
                             categoryId = rt.categoryId,
                             sourceAccountId = rt.accountId,
-                            note = rt.note.ifEmpty { "Auto-logged recurring" },
-                            date = now,
-                            isRecurring = true,
-                            recurringId = rt.id,
-                            isAutoLogged = true
+                            date = rt.nextExecutionDate
                         )
-                        dao.insertTransaction(tx)
+                        if (existing == null) {
+                            val tx = Transaction(
+                                amount = rt.amount,
+                                type = rt.type,
+                                categoryId = rt.categoryId,
+                                sourceAccountId = rt.accountId,
+                                note = rt.note.ifEmpty { "Auto-logged recurring" },
+                                date = rt.nextExecutionDate,
+                                isRecurring = true,
+                                recurringId = rt.id,
+                                isAutoLogged = true
+                            )
+                            dao.insertTransaction(tx)
 
-                        // Adjust Account Balance
-                        val account = dao.getAccountById(rt.accountId)
-                        if (account != null) {
-                            val newBalance = when (rt.type) {
-                                TransactionType.EXPENSE, TransactionType.TRANSFER -> account.balance - rt.amount
-                                TransactionType.INCOME -> account.balance + rt.amount
+                            // Adjust Account Balance
+                            val account = dao.getAccountById(rt.accountId)
+                            if (account != null) {
+                                val newBalance = when (rt.type) {
+                                    TransactionType.EXPENSE, TransactionType.TRANSFER -> account.balance - rt.amount
+                                    TransactionType.INCOME -> account.balance + rt.amount
+                                }
+                                dao.updateAccount(account.copy(balance = newBalance))
                             }
-                            dao.updateAccount(account.copy(balance = newBalance))
                         }
                     } else {
                         // Just send a reminder notification

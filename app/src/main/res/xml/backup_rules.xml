@@ -6,8 +6,7 @@
    See https://developer.android.com/about/versions/12/backup-restore
 -->
 <full-backup-content>
-    <!--
-   <include domain="sharedpref" path="."/>
-   <exclude domain="sharedpref" path="device.xml"/>
--->
+    <!-- Holds the Supabase access/refresh tokens in plaintext; excluded so a restored
+         backup can't be used to resume another device's cloud session. -->
+    <exclude domain="sharedpref" path="supabase_session.xml"/>
 </full-backup-content>

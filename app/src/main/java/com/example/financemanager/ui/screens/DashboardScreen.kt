@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.automirrored.outlined.*
@@ -38,6 +39,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,7 +51,6 @@ import com.example.financemanager.theme.*
 import com.example.financemanager.ui.components.*
 import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.iOSTopAppBar
-import com.example.financemanager.ui.components.iOSBadge
 import com.example.financemanager.ui.components.iOSListSeparator
 import com.example.financemanager.theme.LocalThemeIsDark
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
@@ -79,6 +80,7 @@ fun DashboardScreen(
     val categories by viewModel.categories.collectAsState()
     val transactions by viewModel.transactions.collectAsState()
     val monthlySpent by viewModel.monthlyExpenseTotal.collectAsState()
+    val monthlyIncome by viewModel.monthlyIncomeTotal.collectAsState()
     val monthlyCategorySpend by viewModel.monthlyCategorySpend.collectAsState(initial = emptyMap())
     val cashflowWarning by viewModel.cashflowWarning.collectAsState(initial = null)
     val streakDays by viewModel.streakDays.collectAsState()
@@ -90,6 +92,10 @@ fun DashboardScreen(
     val aiRecap by viewModel.aiRecapText.collectAsState()
 
     var editingTransaction by remember { mutableStateOf<Transaction?>(null) }
+    var showInsightsSheet by remember { mutableStateOf(false) }
+    var editingCategory by remember { mutableStateOf<Category?>(null) }
+    var updatingRolloverCategory by remember { mutableStateOf<Category?>(null) }
+    var deletingCategory by remember { mutableStateOf<Category?>(null) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -145,12 +151,15 @@ fun DashboardScreen(
             val isDark = LocalThemeIsDark.current
             FloatingActionButton(
                 onClick = onNavigateToQuickEntry,
-                containerColor = iOSBlue,
-                contentColor = DeepBackground,
-                shape = CircleShape,
+                // The accent runs light on a dark canvas and deep on a light one,
+                // so the glyph has to flip with it to stay legible.
+                containerColor = PrimaryViolet,
+                contentColor = if (isDark) Color(0xFF13122B) else Color.White,
+                shape = RoundedCornerShape(20.dp),
+                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
                 modifier = Modifier.padding(bottom = 16.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Quick Entry", modifier = Modifier.size(32.dp))
+                Icon(Icons.Default.Add, contentDescription = "Quick Entry", modifier = Modifier.size(28.dp))
             }
         },
         containerColor = if (LocalThemeIsDark.current) iOSBackgroundDark else iOSBackgroundLight
@@ -210,13 +219,13 @@ fun DashboardScreen(
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         IconButton(
                                             onClick = { viewModel.deleteTransaction(tx) },
-                                            modifier = Modifier.size(32.dp).background(DarkSurface, CircleShape)
+                                            modifier = Modifier.size(32.dp).background(BorderColor.copy(alpha = 0.2f), CircleShape)
                                         ) {
                                             Icon(Icons.Default.Close, contentDescription = "Reject", tint = AlertRed, modifier = Modifier.size(16.dp))
                                         }
                                         IconButton(
                                             onClick = { viewModel.updateTransaction(tx, tx.copy(isVerified = true)) },
-                                            modifier = Modifier.size(32.dp).background(DarkSurface, CircleShape)
+                                            modifier = Modifier.size(32.dp).background(BorderColor.copy(alpha = 0.2f), CircleShape)
                                         ) {
                                             Icon(Icons.Default.Check, contentDescription = "Approve", tint = AccentGreen, modifier = Modifier.size(16.dp))
                                         }
@@ -228,44 +237,82 @@ fun DashboardScreen(
                 }
             }
 
-            // 1. Total Balance Header - Minimalist Redesign
+            // 1. Hero Card: Displays Current Month Spent & Total Balance (Clickable for Financial Insights & Balances)
             item {
-                Column(
+                iOSCard(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 32.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
+                        .clickable { showInsightsSheet = true },
+                    style = iOSCardStyle.Grouped
                 ) {
-                    Text(
-                        text = moneyString(totalBalance, isPrivacy, decimals = 2),
-                        style = Typography.displayMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary)
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Total Balance",
-                        style = Typography.labelLarge.copy(color = TextSecondary)
-                    )
-                    
-                    if (streakDays >= 2) {
-                        Spacer(modifier = Modifier.height(16.dp))
+                    // Left-aligned and unpilled: one small label, one large number,
+                    // a hairline, then the secondary figure. The number is the
+                    // only thing on this card that should be loud.
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 22.dp, horizontal = 20.dp)
+                    ) {
                         Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(WarningAmber.copy(alpha = 0.15f))
-                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(
-                                Icons.Default.LocalFireDepartment,
-                                contentDescription = "Streak",
-                                tint = WarningAmber,
-                                modifier = Modifier.size(14.dp)
-                            )
                             Text(
-                                "$streakDays-day streak",
-                                style = Typography.labelSmall.copy(color = WarningAmber, fontWeight = FontWeight.Bold)
+                                text = "SPENT THIS MONTH",
+                                style = iOSCaption2.copy(color = TextMuted, letterSpacing = 1.sp)
+                            )
+                            if (streakDays >= 2) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.LocalFireDepartment,
+                                        contentDescription = "Streak",
+                                        tint = WarningAmber,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                    Text(
+                                        "$streakDays days",
+                                        style = iOSCaption2.copy(color = TextMuted)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        Text(
+                            text = moneyString(monthlySpent, isPrivacy, decimals = 2),
+                            style = Typography.displayMedium.copy(color = TextPrimary)
+                        )
+
+                        Spacer(modifier = Modifier.height(18.dp))
+                        HorizontalDivider(color = BorderColor, thickness = 1.dp)
+                        Spacer(modifier = Modifier.height(14.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Total balance",
+                                    style = Typography.labelMedium.copy(color = TextMuted)
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = moneyString(totalBalance, isPrivacy, decimals = 0),
+                                    style = Typography.titleLarge.copy(color = TextPrimary)
+                                )
+                            }
+                            Icon(
+                                Icons.Default.ChevronRight,
+                                contentDescription = "Insights",
+                                tint = TextMuted,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
@@ -367,7 +414,7 @@ fun DashboardScreen(
             if (badges.isNotEmpty()) {
                 item {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        Text("Achievements", style = Typography.titleMedium.copy(color = TextPrimary), modifier = Modifier.padding(bottom = 8.dp))
+                        SectionHeader("Achievements", modifier = Modifier.padding(bottom = 8.dp))
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             items(badges) { badge ->
                                 Row(
@@ -399,17 +446,10 @@ fun DashboardScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Icon(Icons.Default.EventRepeat, contentDescription = null, tint = WarningAmber, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.EventRepeat, contentDescription = null, tint = TextMuted, modifier = Modifier.size(17.dp))
                                     Text("Upcoming this week", style = Typography.titleMedium.copy(color = TextPrimary))
                                 }
-                                Text(
-                                    "See all",
-                                    style = Typography.labelMedium.copy(color = SecondaryTeal),
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable { onNavigateToSubscriptions() }
-                                        .padding(6.dp)
-                                )
+                                SectionAction("See all", onNavigateToSubscriptions)
                             }
                             Spacer(modifier = Modifier.height(10.dp))
                             upcomingBills.take(3).forEach { bill ->
@@ -458,17 +498,10 @@ fun DashboardScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Icon(Icons.Default.Savings, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.Savings, contentDescription = null, tint = TextMuted, modifier = Modifier.size(17.dp))
                                     Text("Savings Goals", style = Typography.titleMedium.copy(color = TextPrimary))
                                 }
-                                Text(
-                                    "View all",
-                                    style = Typography.labelMedium.copy(color = SecondaryTeal),
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .clickable { onNavigateToGoals() }
-                                        .padding(6.dp)
-                                )
+                                SectionAction("View all", onNavigateToGoals)
                             }
                             Spacer(modifier = Modifier.height(12.dp))
                             goals.sortedByDescending { if (it.targetAmount > 0) it.savedAmount / it.targetAmount else 0.0 }
@@ -516,8 +549,8 @@ fun DashboardScreen(
             // 4. Accounts List (Horizontal Carousel)
             item {
                 Column {
-                    Text("Accounts", style = Typography.titleMedium.copy(color = TextPrimary))
-                    Spacer(modifier = Modifier.height(8.dp))
+                    SectionHeader("Accounts")
+                    Spacer(modifier = Modifier.height(10.dp))
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
@@ -530,20 +563,8 @@ fun DashboardScreen(
 
             // 5. Envelope Budgets / Categories
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Envelope Budgets", style = Typography.titleMedium.copy(color = TextPrimary))
-                    Text(
-                        "Manage",
-                        style = Typography.labelMedium.copy(color = SecondaryTeal),
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { onNavigateToBudget() }
-                            .padding(6.dp)
-                    )
+                SectionHeader("Envelope Budgets") {
+                    SectionAction("Manage", onNavigateToBudget)
                 }
             }
 
@@ -552,9 +573,12 @@ fun DashboardScreen(
                 val categorySpent = monthlyCategorySpend[category.id] ?: 0.0
                 val now = java.util.Calendar.getInstance()
                 EnvelopeProgressItem(
-                    category, 
-                    categorySpent, 
-                    isPrivacy, 
+                    category = category, 
+                    spent = categorySpent, 
+                    privacy = isPrivacy, 
+                    onEdit = { editingCategory = it },
+                    onUpdateRollover = { updatingRolloverCategory = it },
+                    onDelete = { deletingCategory = it },
                     modifier = Modifier
                         .animateItem()
                         .clickable { onNavigateToCategory(category.id, now.get(java.util.Calendar.YEAR), now.get(java.util.Calendar.MONTH)) }
@@ -563,20 +587,10 @@ fun DashboardScreen(
 
             // 6. Recent Transactions Section Header
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Recent Transactions", style = Typography.titleMedium.copy(color = TextPrimary))
-                    Row {
-                        TextButton(onClick = onNavigateToSmsTransactions) {
-                            Text("SMS", style = Typography.labelLarge.copy(color = WarningAmber))
-                        }
-                        TextButton(onClick = onNavigateToLogs) {
-                            Text("View All Logs", style = Typography.labelLarge.copy(color = SecondaryTeal))
-                        }
-                    }
+                SectionHeader("Recent Transactions") {
+                    SectionAction("SMS", onNavigateToSmsTransactions)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    SectionAction("View all", onNavigateToLogs)
                 }
             }
 
@@ -634,6 +648,283 @@ fun DashboardScreen(
             }
         )
     }
+
+    // Edit Category Envelope Dialog
+    editingCategory?.let { category ->
+        var newLimitInput by remember { mutableStateOf(category.budgetLimit.toInt().toString()) }
+        var newNameInput by remember { mutableStateOf(category.name) }
+        AlertDialog(
+            onDismissRequest = { editingCategory = null },
+            containerColor = DarkSurface,
+            title = { Text("Edit Envelope Budget", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = newNameInput,
+                        onValueChange = { newNameInput = it },
+                        label = { Text("Category Name") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = newLimitInput,
+                        onValueChange = { newLimitInput = it },
+                        label = { Text("Monthly Limit (₹)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val limitVal = newLimitInput.toDoubleOrNull() ?: category.budgetLimit
+                    viewModel.updateCategory(category.copy(name = newNameInput.trim(), budgetLimit = limitVal))
+                    editingCategory = null
+                }) {
+                    Text("Save", color = TextPrimary, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingCategory = null }) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
+        )
+    }
+
+    // Update Rollover / Extra Funds Dialog
+    updatingRolloverCategory?.let { category ->
+        var rolloverInput by remember { mutableStateOf(category.rolloverAmount.toInt().toString()) }
+        AlertDialog(
+            onDismissRequest = { updatingRolloverCategory = null },
+            containerColor = DarkSurface,
+            title = { Text("Update Rollover Funds", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Add or update extra rollover funds carried into '${category.name}'.", style = Typography.bodySmall.copy(color = TextSecondary))
+                    OutlinedTextField(
+                        value = rolloverInput,
+                        onValueChange = { rolloverInput = it },
+                        label = { Text("Rollover Funds (₹)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val valInput = rolloverInput.toDoubleOrNull() ?: 0.0
+                    viewModel.updateCategory(category.copy(rolloverAmount = valInput))
+                    updatingRolloverCategory = null
+                }) {
+                    Text("Update", color = AccentGreen, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { updatingRolloverCategory = null }) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
+        )
+    }
+
+    // Delete Category Envelope Dialog
+    deletingCategory?.let { category ->
+        AlertDialog(
+            onDismissRequest = { deletingCategory = null },
+            containerColor = DarkSurface,
+            title = { Text("Delete Envelope", style = Typography.titleLarge.copy(color = AlertRed)) },
+            text = { Text("Are you sure you want to delete '${category.name}' envelope budget? This cannot be undone.", style = Typography.bodyMedium.copy(color = TextPrimary)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.deleteCategory(category)
+                    deletingCategory = null
+                }) {
+                    Text("Delete", color = AlertRed, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletingCategory = null }) {
+                    Text("Cancel", color = TextMuted)
+                }
+            }
+        )
+    }
+
+    // Financial Insights & Balances Bottom Sheet
+    if (showInsightsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showInsightsSheet = false },
+            containerColor = DeepBackground,
+            scrimColor = Color.Black.copy(alpha = 0.5f)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Financial Overview",
+                        style = Typography.titleLarge.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
+                    )
+                    IconButton(onClick = { showInsightsSheet = false }) {
+                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Total Balance Card
+                iOSCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text("Total Account Balance", style = Typography.labelMedium.copy(color = TextSecondary))
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            moneyString(totalBalance, isPrivacy, decimals = 2),
+                            style = Typography.headlineMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                // Income vs Spend vs Net Cashflow Grid
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    iOSCard(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("Income", style = Typography.labelSmall.copy(color = TextMuted))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                moneyString(monthlyIncome, isPrivacy, decimals = 0),
+                                style = Typography.titleMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+                    iOSCard(modifier = Modifier.weight(1f)) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("Expenses", style = Typography.labelSmall.copy(color = TextMuted))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                moneyString(monthlySpent, isPrivacy, decimals = 0),
+                                style = Typography.titleMedium.copy(color = AlertRed, fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+                    iOSCard(modifier = Modifier.weight(1f)) {
+                        val net = monthlyIncome - monthlySpent
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text("Net Flow", style = Typography.labelSmall.copy(color = TextMuted))
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                moneyString(net, isPrivacy, decimals = 0),
+                                style = Typography.titleMedium.copy(
+                                    color = if (net >= 0) AccentGreen else AlertRed,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Account Balances List
+                Text("Accounts Breakdown", style = Typography.titleMedium.copy(color = TextPrimary))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                accounts.forEach { acc ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(PrimaryViolet.copy(alpha = 0.12f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(Icons.Default.AccountBalance, contentDescription = null, tint = PrimaryViolet, modifier = Modifier.size(18.dp))
+                            }
+                            Column {
+                                Text(acc.name, style = Typography.bodyMedium.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold))
+                                Text(acc.type.name, style = Typography.labelSmall.copy(color = TextMuted))
+                            }
+                        }
+                        Text(
+                            moneyString(acc.balance, isPrivacy),
+                            style = Typography.bodyMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Button to open full Reports & Insights
+                iOSButton(
+                    onClick = {
+                        showInsightsSheet = false
+                        onNavigateToInsights()
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("View Detailed Reports & Insights ➔")
+                }
+
+                Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+}
+
+/**
+ * Section label for the dashboard feed. Small, tracked-out and muted so the
+ * headings recede and the figures under them carry the page.
+ */
+@Composable
+private fun SectionHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    trailing: @Composable RowScope.() -> Unit = {}
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = title.uppercase(),
+            style = iOSCaption2.copy(color = TextMuted, letterSpacing = 1.sp)
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, content = trailing)
+    }
+}
+
+/** The one link treatment in the app: accent, small, no button chrome. */
+@Composable
+private fun SectionAction(label: String, onClick: () -> Unit) {
+    Text(
+        text = label,
+        style = Typography.labelMedium.copy(color = PrimaryViolet, fontWeight = FontWeight.Medium),
+        modifier = Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
+    )
 }
 
 @Composable
@@ -693,7 +984,15 @@ fun AccountCard(account: Account, privacy: Boolean = false, modifier: Modifier =
 }
 
 @Composable
-fun EnvelopeProgressItem(category: Category, spent: Double, privacy: Boolean = false, modifier: Modifier = Modifier) {
+fun EnvelopeProgressItem(
+    category: Category, 
+    spent: Double, 
+    privacy: Boolean = false, 
+    onEdit: (Category) -> Unit = {},
+    onUpdateRollover: (Category) -> Unit = {},
+    onDelete: (Category) -> Unit = {},
+    modifier: Modifier = Modifier
+) {
     val limit = category.budgetLimit
     val remaining = maxOf(0.0, limit - spent)
     val ratio = if (limit > 0) (spent / limit).toFloat() else 0f
@@ -724,7 +1023,8 @@ fun EnvelopeProgressItem(category: Category, spent: Double, privacy: Boolean = f
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Box(
                         modifier = Modifier
@@ -740,19 +1040,41 @@ fun EnvelopeProgressItem(category: Category, spent: Double, privacy: Boolean = f
                         )
                     }
                     Column {
-                        Text(category.name, style = Typography.titleMedium.copy(color = TextPrimary))
+                        Text(
+                            category.name,
+                            style = Typography.titleMedium.copy(color = TextPrimary),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                         Text("Limit: ${moneyString(limit, privacy)}", style = Typography.labelMedium.copy(color = TextSecondary))
                     }
                 }
-                Column(horizontalAlignment = Alignment.End) {
-                    Text(
-                        "${moneyString(remaining, privacy)} left",
-                        style = Typography.titleMedium.copy(
-                            color = if (remaining > 0) TextPrimary else AlertRed,
-                            fontWeight = FontWeight.Bold
+
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Column(horizontalAlignment = Alignment.End) {
+                        Text(
+                            "${moneyString(remaining, privacy)} left",
+                            style = Typography.titleMedium.copy(
+                                color = if (remaining > 0) TextPrimary else AlertRed,
+                                fontWeight = FontWeight.Bold
+                            )
                         )
-                    )
-                    Text("Spent: ${moneyString(spent, privacy)}", style = Typography.labelMedium.copy(color = TextSecondary))
+                        Text("Spent: ${moneyString(spent, privacy)}", style = Typography.labelMedium.copy(color = TextSecondary))
+                    }
+
+                    Spacer(modifier = Modifier.width(4.dp))
+                    IconButton(onClick = { onEdit(category) }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Edit, contentDescription = "Edit Limit", tint = SecondaryTeal, modifier = Modifier.size(16.dp))
+                    }
+                    IconButton(onClick = { onUpdateRollover(category) }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Autorenew, contentDescription = "Update Rollover", tint = AccentGreen, modifier = Modifier.size(16.dp))
+                    }
+                    IconButton(onClick = { onDelete(category) }, modifier = Modifier.size(28.dp)) {
+                        Icon(Icons.Default.Delete, contentDescription = "Delete Envelope", tint = AlertRed, modifier = Modifier.size(16.dp))
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(10.dp))
@@ -779,10 +1101,17 @@ fun TransactionItem(
     onDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Expenses are the default case in this list, so they stay neutral — a
+    // column of red numbers reads as an alert rather than a ledger. Only money
+    // arriving gets colour.
     val amountColor = when (transaction.type) {
-        TransactionType.EXPENSE -> AlertRed
+        TransactionType.EXPENSE -> TextPrimary
         TransactionType.INCOME -> AccentGreen
-        TransactionType.TRANSFER -> SecondaryTeal
+        TransactionType.TRANSFER -> TextSecondary
+    }
+    val iconColor = when (transaction.type) {
+        TransactionType.INCOME -> AccentGreen
+        else -> TextMuted
     }
 
     val prefix = when (transaction.type) {
@@ -824,7 +1153,7 @@ fun TransactionItem(
                             TransactionType.INCOME -> Icons.Outlined.ArrowUpward
                             TransactionType.TRANSFER -> Icons.Outlined.SwapHoriz
                         }
-                        Icon(icon, contentDescription = transaction.type.name, tint = amountColor, modifier = Modifier.size(24.dp))
+                        Icon(icon, contentDescription = transaction.type.name, tint = iconColor, modifier = Modifier.size(22.dp))
                     }
                     Column {
                         Text(
@@ -845,10 +1174,10 @@ fun TransactionItem(
                 ) {
                     Text(
                         "$prefix${moneyString(transaction.amount, privacy)}",
-                        style = Typography.titleMedium.copy(color = amountColor, fontWeight = FontWeight.Bold)
+                        style = Typography.titleMedium.copy(color = amountColor, fontWeight = FontWeight.SemiBold)
                     )
                     IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = SecondaryTeal, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = TextMuted, modifier = Modifier.size(16.dp))
                     }
                     IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
                         Icon(Icons.Default.Delete, contentDescription = "Delete", tint = TextMuted, modifier = Modifier.size(16.dp))

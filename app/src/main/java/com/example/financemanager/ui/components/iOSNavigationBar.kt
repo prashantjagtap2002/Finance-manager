@@ -1,6 +1,7 @@
 package com.example.financemanager.ui.components
 
-import androidx.compose.foundation.background
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -15,55 +16,42 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarColors
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.financemanager.theme.iOSBlue
-import com.example.financemanager.theme.iOSTranslucentBarDark
-import com.example.financemanager.theme.iOSTranslucentBarLight
-import com.example.financemanager.theme.iOSTextPrimaryDark
-import com.example.financemanager.theme.iOSTextPrimaryLight
-import com.example.financemanager.theme.iOSTitle1
-import com.example.financemanager.theme.LocalThemeIsDark
+import com.example.financemanager.theme.BorderColor
+import com.example.financemanager.theme.DeepBackground
+import com.example.financemanager.theme.TextMuted
+import com.example.financemanager.theme.TextPrimary
 
 /**
- * iOS-style Navigation Bar components following Apple's design patterns.
+ * Top and bottom navigation chrome.
  *
- * Includes:
- * - iOSTopAppBar: Large title navigation bar (collapsible)
- * - iOSTabBar: Bottom tab bar with translucent background and blur effect
- * - iOSTabBarItem: Individual tab item with icon and label
+ * Both bars sit on the page background rather than on their own surface colour,
+ * so the app reads as one continuous sheet with a single hairline marking the
+ * edge of the scroll area. Nothing here is tinted with the accent — the accent
+ * is reserved for actions and money.
  */
 
-// Data class for tab bar items
 data class iOSTabItem(
     val icon: ImageVector,
     val label: String
 )
 
-/**
- * iOS-style Large Title Top App Bar.
- *
- * Matches iOS navigation bars with:
- * - Large bold title (28sp Title 1 style)
- * - Transparent/translucent background
- * - Blue navigation icons
- * - Optional back button and actions
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun iOSTopAppBar(
@@ -73,60 +61,47 @@ fun iOSTopAppBar(
     actions: @Composable RowScope.() -> Unit = {},
     isLargeTitle: Boolean = true
 ) {
-    val isDark = LocalThemeIsDark.current
-
     TopAppBar(
         title = {
             Text(
                 title,
-                style = if (isLargeTitle)
-                    iOSTitle1.copy(
-                        color = if (isDark) iOSTextPrimaryDark else iOSTextPrimaryLight,
-                        fontWeight = FontWeight.Bold
-                    )
-                else
-                    TextStyle(
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = if (isDark) iOSTextPrimaryDark else iOSTextPrimaryLight
-                    )
+                style = TextStyle(
+                    fontSize = if (isLargeTitle) 26.sp else 18.sp,
+                    lineHeight = if (isLargeTitle) 32.sp else 24.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = if (isLargeTitle) (-0.6).sp else (-0.3).sp,
+                    color = TextPrimary
+                )
             )
         },
         modifier = modifier,
         navigationIcon = navigationIcon,
         actions = actions,
         colors = TopAppBarDefaults.topAppBarColors(
-            containerColor = Color.Transparent,
-            navigationIconContentColor = iOSBlue,
-            actionIconContentColor = iOSBlue
+            containerColor = DeepBackground,
+            scrolledContainerColor = DeepBackground,
+            titleContentColor = TextPrimary,
+            // Neutral icons keep the bar quiet; the accent stays on the FAB.
+            navigationIconContentColor = TextPrimary,
+            actionIconContentColor = TextMuted
         )
     )
 }
 
-/**
- * iOS-style navigation icon (back button).
- * Pre-configured with chevron-left icon and iOS styling.
- */
 @Composable
 fun iOSBackButton(onClick: () -> Unit) {
     IconButton(onClick = onClick) {
         Icon(
             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
             contentDescription = "Back",
-            tint = iOSBlue
+            tint = TextPrimary
         )
     }
 }
 
 /**
- * iOS-style Tab Bar component.
- *
- * Features:
- * - Translucent background with glass effect
- * - SF Symbols-style icons
- * - Blue tint when selected
- * - Gray color when unselected
- * - 5 tabs maximum (iOS standard)
+ * Bottom tab bar. Selection is shown by weight and full-contrast colour rather
+ * than a coloured pill, which keeps five tabs from turning into five badges.
  */
 @Composable
 fun iOSTabBar(
@@ -135,30 +110,22 @@ fun iOSTabBar(
     tabs: List<iOSTabItem>,
     modifier: Modifier = Modifier
 ) {
-    val isDark = LocalThemeIsDark.current
-    val backgroundColor = if (isDark)
-        Color(0xFF000000)
-    else
-        Color(0xFFFFFFFF)
-
     Surface(
         modifier = modifier,
-        color = backgroundColor,
+        color = DeepBackground,
         tonalElevation = 0.dp
     ) {
         Column {
-            androidx.compose.material3.HorizontalDivider(
-                color = if (isDark) Color(0xFF333333) else Color(0xFFEEEEEE),
-                thickness = 1.dp
-            )
+            HorizontalDivider(color = BorderColor, thickness = 1.dp)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .navigationBarsPadding()
-                    .padding(bottom = 36.dp)
-                    .height(56.dp)
+                    .padding(bottom = 8.dp, top = 6.dp)
+                    .height(52.dp)
                     .padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.SpaceAround
+                horizontalArrangement = Arrangement.SpaceAround,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 tabs.forEachIndexed { index, tab ->
                     iOSTabBarItem(
@@ -173,14 +140,6 @@ fun iOSTabBar(
     }
 }
 
-/**
- * iOS-style Tab Bar Item.
- *
- * Individual tab item with:
- * - Icon (24dp) that changes color based on selection
- * - Label below icon
- * - Blue when selected, gray when unselected
- */
 @Composable
 fun iOSTabBarItem(
     selected: Boolean,
@@ -188,11 +147,15 @@ fun iOSTabBarItem(
     icon: ImageVector,
     label: String
 ) {
-    val isDark = LocalThemeIsDark.current
     val interactionSource = remember { MutableInteractionSource() }
 
-    val selectedColor = if (isDark) Color.White else Color(0xFF111111)
-    val unselectedColor = Color(0xFF888888)
+    val selectedColor = TextPrimary
+    val unselectedColor = TextMuted
+    val tint by animateColorAsState(
+        targetValue = if (selected) selectedColor else unselectedColor,
+        animationSpec = tween(160),
+        label = "tabTint"
+    )
 
     Column(
         modifier = Modifier
@@ -208,16 +171,17 @@ fun iOSTabBarItem(
         Icon(
             imageVector = icon,
             contentDescription = label,
-            tint = if (selected) selectedColor else unselectedColor,
-            modifier = Modifier.size(24.dp)
+            tint = tint,
+            modifier = Modifier.size(23.dp)
         )
-        androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(2.dp))
+        androidx.compose.foundation.layout.Spacer(modifier = Modifier.height(3.dp))
         Text(
             text = label,
             style = TextStyle(
                 fontSize = 11.sp,
-                fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-                color = if (selected) selectedColor else unselectedColor
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                letterSpacing = 0.sp,
+                color = tint
             )
         )
     }

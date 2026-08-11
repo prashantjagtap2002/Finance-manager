@@ -1,12 +1,15 @@
 package com.example.financemanager.services
 
+import android.content.ContentValues
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
+import android.os.Build
 import android.os.Environment
+import android.provider.MediaStore
 import com.example.financemanager.data.Account
 import com.example.financemanager.data.Category
 import com.example.financemanager.data.Transaction
@@ -145,18 +148,47 @@ object PdfGenerator {
 
         document.finishPage(currentPage)
 
-        return try {
-            val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-            val file = File(downloadsDir, "Finance_Report_${monthName.replace(" ", "_")}.pdf")
-            val outputStream = FileOutputStream(file)
-            document.writeTo(outputStream)
-            document.close()
-            outputStream.close()
-            file.absolutePath
-        } catch (e: Exception) {
-            e.printStackTrace()
-            document.close()
-            null
+        val fileName = "Finance_Report_${monthName.replace(" ", "_")}.pdf"
+
+        // Direct File I/O against the public Downloads directory only works on API < 29;
+        // on API 29+ (scoped storage) it silently fails without WRITE_EXTERNAL_STORAGE /
+        // MANAGE_EXTERNAL_STORAGE, neither of which this app requests. Route through
+        // MediaStore on Q+ instead, which needs no storage permission at all.
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val resolver = context.contentResolver
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: return null.also { document.close() }
+                resolver.openOutputStream(uri)?.use { document.writeTo(it) }
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                document.close()
+                "Downloads/$fileName"
+            } catch (e: Exception) {
+                e.printStackTrace()
+                document.close()
+                null
+            }
+        } else {
+            try {
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                val file = File(downloadsDir, fileName)
+                val outputStream = FileOutputStream(file)
+                document.writeTo(outputStream)
+                document.close()
+                outputStream.close()
+                file.absolutePath
+            } catch (e: Exception) {
+                e.printStackTrace()
+                document.close()
+                null
+            }
         }
     }
 }

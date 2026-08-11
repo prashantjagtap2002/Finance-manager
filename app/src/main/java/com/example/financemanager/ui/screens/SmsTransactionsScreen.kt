@@ -328,7 +328,7 @@ private fun EmptySmsState(
                 onClick = onImport,
                 variant = iOSButtonVariant.Accent, accentColor = SecondaryTeal
             ) {
-                Icon(Icons.Default.FileUpload, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
+                Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Import JSON", fontWeight = FontWeight.SemiBold)
             }
@@ -587,7 +587,6 @@ private fun SmsTransactionCard(
                                 Icon(
                                     Icons.Default.Restore,
                                     contentDescription = null,
-                                    tint = Color.Black,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
@@ -627,7 +626,6 @@ private fun SmsTransactionCard(
                                 Icon(
                                     Icons.Default.Check,
                                     contentDescription = null,
-                                    tint = Color.Black,
                                     modifier = Modifier.size(16.dp)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
@@ -682,6 +680,59 @@ private fun SmsPermissionCard(
     }
 }
 
+@Composable
+private fun approveFieldColors() = OutlinedTextFieldDefaults.colors(
+    focusedTextColor = TextPrimary,
+    unfocusedTextColor = TextPrimary,
+    focusedContainerColor = DeepBackground,
+    unfocusedContainerColor = DeepBackground,
+    focusedBorderColor = SecondaryTeal,
+    unfocusedBorderColor = Color.Transparent,
+    focusedLeadingIconColor = SecondaryTeal,
+    unfocusedLeadingIconColor = TextSecondary,
+    focusedLabelColor = SecondaryTeal,
+    unfocusedLabelColor = TextSecondary,
+    cursorColor = SecondaryTeal
+)
+
+@Composable
+private fun SegmentedToggle(
+    options: List<String>,
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit,
+    selectedColors: List<Color>,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(DeepBackground, RoundedCornerShape(14.dp))
+            .padding(4.dp)
+    ) {
+        options.forEachIndexed { index, label ->
+            val isSelected = index == selectedIndex
+            val color = selectedColors.getOrElse(index) { TextPrimary }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (isSelected) color.copy(alpha = 0.16f) else Color.Transparent)
+                    .clickable { onSelect(index) }
+                    .padding(vertical = 9.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    label,
+                    style = Typography.labelMedium.copy(
+                        color = if (isSelected) color else TextSecondary,
+                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                    )
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ApproveSmsDialog(
@@ -703,73 +754,125 @@ private fun ApproveSmsDialog(
     var accountExpanded by remember { mutableStateOf(false) }
     var categoryExpanded by remember { mutableStateOf(false) }
     var debtExpanded by remember { mutableStateOf(false) }
-    
+
     val parsedAmountStr = tx.amount.replace("Rs.", "").replace(",", "").trim()
     var settleAmountStr by remember { mutableStateOf(parsedAmountStr) }
     var selectedDebtId by remember { mutableStateOf<Long>(0L) }
     var currentTxType by remember { mutableStateOf(if (tx.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE) }
 
     val activeDebts = debts.filter { !it.isSettled }
+    val fieldColors = approveFieldColors()
+    val directionColor = if (currentTxType == TransactionType.INCOME) AccentGreen else AlertRed
+    val bankInitial = tx.accountName.firstOrNull()?.uppercaseChar() ?: '?'
 
     androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
-        iOSCard(
-            modifier = Modifier.fillMaxWidth(),
-            style = com.example.financemanager.ui.components.iOSCardStyle.Grouped
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 640.dp),
+            shape = RoundedCornerShape(24.dp),
+            color = DarkSurface
         ) {
-            LazyColumn(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            LazyColumn(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
                 item {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Default.TaskAlt,
-                            contentDescription = null,
-                            tint = AccentGreen,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Approve Transaction", style = Typography.titleLarge.copy(color = TextPrimary))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Column {
+                            Text(
+                                "Approve Transaction",
+                                style = Typography.titleLarge.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                "Review the details before logging",
+                                style = Typography.bodySmall.copy(color = TextSecondary)
+                            )
+                        }
+                        IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Close",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
 
                 item {
                     // Transaction details summary card
-                    Surface(
-                        color = DeepBackground,
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
+                    Surface(color = DeepBackground, shape = RoundedCornerShape(16.dp)) {
+                        Column(modifier = Modifier.padding(14.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    tx.amount,
-                                    style = Typography.headlineSmall.copy(
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (currentTxType == TransactionType.INCOME) AccentGreen else AlertRed
+                                Box(
+                                    modifier = Modifier
+                                        .size(42.dp)
+                                        .clip(CircleShape)
+                                        .background(directionColor.copy(alpha = 0.14f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        "$bankInitial",
+                                        style = Typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = directionColor)
                                     )
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
+                                }
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        tx.amount,
+                                        style = Typography.headlineSmall.copy(fontWeight = FontWeight.Bold, color = directionColor)
+                                    )
+                                    if (tx.counterparty.isNotEmpty()) {
+                                        Text(
+                                            tx.counterparty,
+                                            style = Typography.bodyMedium.copy(color = TextPrimary),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
                                 Icon(
                                     if (currentTxType == TransactionType.INCOME) Icons.Default.CallReceived else Icons.Default.CallMade,
                                     contentDescription = null,
-                                    tint = if (currentTxType == TransactionType.INCOME) AccentGreen else AlertRed,
+                                    tint = directionColor,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            if (tx.counterparty.isNotEmpty()) {
-                                Text(tx.counterparty, style = Typography.bodyMedium.copy(color = TextPrimary))
-                            }
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (tx.accountName.isNotEmpty()) {
-                                    Text(
-                                        tx.accountName,
-                                        style = Typography.labelMedium.copy(color = SecondaryTeal)
-                                    )
-                                }
-                                if (tx.reference.isNotEmpty()) {
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        "Ref: ",
-                                        style = Typography.labelSmall.copy(color = TextSecondary)
-                                    )
+
+                            if (tx.accountName.isNotEmpty() || tx.reference.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                HorizontalDivider(color = BorderColor.copy(alpha = 0.5f), thickness = 0.5.dp)
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (tx.accountName.isNotEmpty()) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(
+                                                Icons.Default.AccountBalance,
+                                                contentDescription = null,
+                                                tint = SecondaryTeal,
+                                                modifier = Modifier.size(13.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(4.dp))
+                                            Text(tx.accountName, style = Typography.labelSmall.copy(color = TextSecondary))
+                                        }
+                                    }
+                                    if (tx.reference.isNotEmpty()) {
+                                        Text(
+                                            "Ref: ${tx.reference}",
+                                            style = Typography.labelSmall.copy(color = TextSecondary),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -778,117 +881,41 @@ private fun ApproveSmsDialog(
 
                 // Standard vs Settle IOU Toggle
                 item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(DeepBackground, RoundedCornerShape(8.dp))
-                            .padding(4.dp)
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (!isSettleIou) DarkSurface else Color.Transparent)
-                                .clickable { isSettleIou = false }
-                                .padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "Standard Log",
-                                style = Typography.labelMedium.copy(
-                                    color = if (!isSettleIou) TextPrimary else TextSecondary,
-                                    fontWeight = if (!isSettleIou) FontWeight.Bold else FontWeight.Medium
-                                )
-                            )
-                        }
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isSettleIou) DarkSurface else Color.Transparent)
-                                .clickable { isSettleIou = true }
-                                .padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "Settle IOU",
-                                style = Typography.labelMedium.copy(
-                                    color = if (isSettleIou) TextPrimary else TextSecondary,
-                                    fontWeight = if (isSettleIou) FontWeight.Bold else FontWeight.Medium
-                                )
-                            )
-                        }
-                    }
+                    SegmentedToggle(
+                        options = listOf("Standard Log", "Settle IOU"),
+                        selectedIndex = if (isSettleIou) 1 else 0,
+                        onSelect = { isSettleIou = it == 1 },
+                        selectedColors = listOf(SecondaryTeal, GoldAccent)
+                    )
                 }
 
                 if (!isSettleIou) {
                     item {
-                        // Type Toggle (Income / Expense)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(DeepBackground, RoundedCornerShape(8.dp))
-                                .padding(4.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (currentTxType == TransactionType.EXPENSE) AlertRed.copy(alpha=0.2f) else Color.Transparent)
-                                    .clickable { currentTxType = TransactionType.EXPENSE }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "Expense",
-                                    style = Typography.labelMedium.copy(
-                                        color = if (currentTxType == TransactionType.EXPENSE) AlertRed else TextSecondary,
-                                        fontWeight = if (currentTxType == TransactionType.EXPENSE) FontWeight.Bold else FontWeight.Medium
-                                    )
-                                )
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(if (currentTxType == TransactionType.INCOME) AccentGreen.copy(alpha=0.2f) else Color.Transparent)
-                                    .clickable { currentTxType = TransactionType.INCOME }
-                                    .padding(vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "Income",
-                                    style = Typography.labelMedium.copy(
-                                        color = if (currentTxType == TransactionType.INCOME) AccentGreen else TextSecondary,
-                                        fontWeight = if (currentTxType == TransactionType.INCOME) FontWeight.Bold else FontWeight.Medium
-                                    )
-                                )
-                            }
-                        }
+                        SegmentedToggle(
+                            options = listOf("Expense", "Income"),
+                            selectedIndex = if (currentTxType == TransactionType.INCOME) 1 else 0,
+                            onSelect = { currentTxType = if (it == 1) TransactionType.INCOME else TransactionType.EXPENSE },
+                            selectedColors = listOf(AlertRed, AccentGreen)
+                        )
                     }
                 }
 
                 if (isSettleIou) {
                     // IOU Fields
                     item {
-                        Text("Select IOU to Settle", style = Typography.labelLarge.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold))
                         ExposedDropdownMenuBox(
                             expanded = debtExpanded,
                             onExpandedChange = { debtExpanded = !debtExpanded }
                         ) {
                             OutlinedTextField(
-                                value = activeDebts.find { it.id == selectedDebtId }?.personName ?: "Select Debt",
+                                value = activeDebts.find { it.id == selectedDebtId }?.personName ?: "Select debt",
                                 onValueChange = {},
                                 readOnly = true,
+                                label = { Text("Settle IOU") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = debtExpanded) },
                                 modifier = Modifier.menuAnchor().fillMaxWidth(),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = TextPrimary,
-                                    unfocusedTextColor = TextPrimary,
-                                    focusedBorderColor = SecondaryTeal,
-                                    unfocusedBorderColor = BorderColor
-                                )
+                                colors = fieldColors
                             )
                             ExposedDropdownMenu(
                                 expanded = debtExpanded,
@@ -912,27 +939,21 @@ private fun ApproveSmsDialog(
                             }
                         }
                     }
-                    
+
                     item {
-                        Text("Settlement Amount", style = Typography.labelLarge.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold))
                         OutlinedTextField(
                             value = settleAmountStr,
                             onValueChange = { settleAmountStr = it },
+                            label = { Text("Settlement amount") },
                             modifier = Modifier.fillMaxWidth(),
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
                             shape = RoundedCornerShape(12.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary,
-                                focusedBorderColor = SecondaryTeal,
-                                unfocusedBorderColor = BorderColor
-                            )
+                            colors = fieldColors
                         )
                     }
                 }
 
                 item {
-                    Text("Account", style = Typography.labelLarge.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold))
                     ExposedDropdownMenuBox(
                         expanded = accountExpanded,
                         onExpandedChange = { accountExpanded = !accountExpanded }
@@ -941,23 +962,14 @@ private fun ApproveSmsDialog(
                             value = accounts.find { it.id == selectedAccountId }?.name ?: "Select account",
                             onValueChange = {},
                             readOnly = true,
+                            label = { Text("Account") },
                             leadingIcon = {
-                                Icon(
-                                    Icons.Default.AccountBalance,
-                                    contentDescription = null,
-                                    tint = SecondaryTeal,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                                Icon(Icons.Default.AccountBalance, contentDescription = null, modifier = Modifier.size(18.dp))
                             },
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = accountExpanded) },
                             modifier = Modifier.menuAnchor().fillMaxWidth(),
                             shape = RoundedCornerShape(12.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = TextPrimary,
-                                unfocusedTextColor = TextPrimary,
-                                focusedBorderColor = SecondaryTeal,
-                                unfocusedBorderColor = BorderColor
-                            )
+                            colors = fieldColors
                         )
                         ExposedDropdownMenu(
                             expanded = accountExpanded,
@@ -965,18 +977,7 @@ private fun ApproveSmsDialog(
                         ) {
                             accounts.forEach { account ->
                                 DropdownMenuItem(
-                                    text = {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Icon(
-                                                Icons.Default.AccountBalance,
-                                                contentDescription = null,
-                                                tint = SecondaryTeal,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(modifier = Modifier.width(8.dp))
-                                            Text(account.name)
-                                        }
-                                    },
+                                    text = { Text(account.name) },
                                     onClick = {
                                         onAccountChange(account.id)
                                         accountExpanded = false
@@ -992,7 +993,6 @@ private fun ApproveSmsDialog(
 
                 if (!isSettleIou) {
                     item {
-                        Text("Envelope Budget", style = Typography.labelLarge.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold))
                         ExposedDropdownMenuBox(
                             expanded = categoryExpanded,
                             onExpandedChange = { categoryExpanded = !categoryExpanded }
@@ -1001,23 +1001,14 @@ private fun ApproveSmsDialog(
                                 value = categories.find { it.id == selectedCategoryId }?.name ?: "Select envelope",
                                 onValueChange = {},
                                 readOnly = true,
+                                label = { Text("Envelope budget") },
                                 leadingIcon = {
-                                    Icon(
-                                        Icons.Default.Category,
-                                        contentDescription = null,
-                                        tint = SecondaryTeal,
-                                        modifier = Modifier.size(18.dp)
-                                    )
+                                    Icon(Icons.Default.Category, contentDescription = null, modifier = Modifier.size(18.dp))
                                 },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = categoryExpanded) },
                                 modifier = Modifier.menuAnchor().fillMaxWidth(),
                                 shape = RoundedCornerShape(12.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = TextPrimary,
-                                    unfocusedTextColor = TextPrimary,
-                                    focusedBorderColor = SecondaryTeal,
-                                    unfocusedBorderColor = BorderColor
-                                )
+                                colors = fieldColors
                             )
                             ExposedDropdownMenu(
                                 expanded = categoryExpanded,
@@ -1041,64 +1032,48 @@ private fun ApproveSmsDialog(
                 }
 
                 item {
-                    Text("Add Note", style = Typography.labelLarge.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold))
                     OutlinedTextField(
                         value = note,
                         onValueChange = onNoteChange,
-                        modifier = Modifier.fillMaxWidth().height(80.dp),
-                        placeholder = {
-                            Text(
-                                "Optional note for this transaction...",
-                                style = Typography.bodyMedium.copy(color = TextSecondary)
-                            )
-                        },
+                        label = { Text("Note (optional)") },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
                         leadingIcon = {
-                            Icon(
-                                Icons.Default.Notes,
-                                contentDescription = null,
-                                tint = SecondaryTeal,
-                                modifier = Modifier.size(18.dp)
-                            )
+                            Icon(Icons.Default.Notes, contentDescription = null, modifier = Modifier.size(18.dp))
                         },
                         shape = RoundedCornerShape(12.dp),
-                        maxLines = 2,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = TextPrimary,
-                            unfocusedTextColor = TextPrimary,
-                            focusedBorderColor = SecondaryTeal,
-                            unfocusedBorderColor = BorderColor,
-                            cursorColor = SecondaryTeal
-                        )
+                        maxLines = 3,
+                        colors = fieldColors
                     )
                 }
 
                 item {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    iOSButton(
-                        onClick = {
-                            if (isSettleIou) {
-                                val debt = activeDebts.find { it.id == selectedDebtId }
-                                val amount = settleAmountStr.toDoubleOrNull() ?: 0.0
-                                if (debt != null && amount > 0) {
-                                    onConfirmDebt(debt, amount)
+                    Column {
+                        iOSButton(
+                            onClick = {
+                                if (isSettleIou) {
+                                    val debt = activeDebts.find { it.id == selectedDebtId }
+                                    val amount = settleAmountStr.toDoubleOrNull() ?: 0.0
+                                    if (debt != null && amount > 0) {
+                                        onConfirmDebt(debt, amount)
+                                    }
+                                } else {
+                                    onConfirmStandard(currentTxType)
                                 }
-                            } else {
-                                onConfirmStandard(currentTxType)
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        variant = iOSButtonVariant.Accent, accentColor = AccentGreen
-                    ) {
-                        Icon(Icons.Default.Check, contentDescription = null, tint = Color.Black, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Confirm & Log", fontWeight = FontWeight.SemiBold)
-                    }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            variant = iOSButtonVariant.Accent, accentColor = AccentGreen
+                        ) {
+                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Confirm & Log", fontWeight = FontWeight.SemiBold)
+                        }
 
-                    TextButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text("Cancel", color = TextSecondary)
+                        TextButton(
+                            onClick = onDismiss,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Cancel", color = TextSecondary)
+                        }
                     }
                 }
             }

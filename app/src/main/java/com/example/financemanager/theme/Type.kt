@@ -16,37 +16,37 @@ import androidx.compose.ui.unit.sp
 // iOS Large Title - 34sp Bold (used for hero sections, large navigation titles)
 val iOSLargeTitle = TextStyle(
     fontFamily = FontFamily.SansSerif,
-    fontWeight = FontWeight.Bold,
+    fontWeight = FontWeight.SemiBold,
     fontSize = 34.sp,
-    lineHeight = 41.sp,
-    letterSpacing = 0.sp
+    lineHeight = 40.sp,
+    letterSpacing = (-1.0).sp
 )
 
 // iOS Title 1 - 28sp Bold (used for screen titles)
 val iOSTitle1 = TextStyle(
     fontFamily = FontFamily.SansSerif,
-    fontWeight = FontWeight.Bold,
+    fontWeight = FontWeight.SemiBold,
     fontSize = 28.sp,
     lineHeight = 34.sp,
-    letterSpacing = 0.sp
+    letterSpacing = (-0.7).sp
 )
 
 // iOS Title 2 - 22sp Bold (used for section headers)
 val iOSTitle2 = TextStyle(
     fontFamily = FontFamily.SansSerif,
-    fontWeight = FontWeight.Bold,
+    fontWeight = FontWeight.SemiBold,
     fontSize = 22.sp,
     lineHeight = 28.sp,
-    letterSpacing = 0.sp
+    letterSpacing = (-0.45).sp
 )
 
 // iOS Title 3 - 20sp Semibold (used for subsection headers)
 val iOSTitle3 = TextStyle(
     fontFamily = FontFamily.SansSerif,
-    fontWeight = FontWeight.Medium,
+    fontWeight = FontWeight.SemiBold,
     fontSize = 20.sp,
-    lineHeight = 25.sp,
-    letterSpacing = 0.sp
+    lineHeight = 26.sp,
+    letterSpacing = (-0.35).sp
 )
 
 // iOS Headline - 17sp Semibold (used for emphasis)
@@ -97,19 +97,21 @@ val iOSFootnote = TextStyle(
 // iOS Caption 1 - 12sp Regular (tiny labels)
 val iOSCaption1 = TextStyle(
     fontFamily = FontFamily.SansSerif,
-    fontWeight = FontWeight.Normal,
+    fontWeight = FontWeight.Medium,
     fontSize = 12.sp,
     lineHeight = 16.sp,
-    letterSpacing = 0.sp
+    letterSpacing = 0.1.sp
 )
 
 // iOS Caption 2 - 11sp Regular (smallest labels)
+// Section labels: small, medium weight, slightly tracked out. The one place
+// where letter-spacing goes positive.
 val iOSCaption2 = TextStyle(
     fontFamily = FontFamily.SansSerif,
-    fontWeight = FontWeight.Normal,
+    fontWeight = FontWeight.Medium,
     fontSize = 11.sp,
-    lineHeight = 16.sp,
-    letterSpacing = 0.sp
+    lineHeight = 15.sp,
+    letterSpacing = 0.4.sp
 )
 
 // ============================================================================
@@ -132,11 +134,11 @@ val Typography = Typography(
 
     // Headline (emphasis)
     headlineMedium = iOSHeadline,
-    headlineSmall = iOSHeadline.copy(fontWeight = FontWeight.Medium),
+    headlineSmall = iOSHeadline.copy(fontWeight = FontWeight.SemiBold),
 
     // Title (for navigation, tab bar labels)
-    titleLarge = iOSHeadline,
-    titleMedium = iOSCallout,
+    titleLarge = iOSHeadline.copy(fontWeight = FontWeight.SemiBold),
+    titleMedium = iOSCallout.copy(fontWeight = FontWeight.Medium),
     titleSmall = iOSSubhead,
 
     // Body (primary text)
@@ -145,7 +147,7 @@ val Typography = Typography(
     bodySmall = iOSSubhead,
 
     // Label (buttons, badges, small UI elements)
-    labelLarge = iOSCallout,
+    labelLarge = iOSCallout.copy(fontWeight = FontWeight.Medium),
     labelMedium = iOSFootnote,
     labelSmall = iOSCaption1
 )

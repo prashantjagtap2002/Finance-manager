@@ -372,7 +372,7 @@ fun SettingsScreen(
                             variant = iOSButtonVariant.Accent, accentColor = AccentGreen,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Icon(Icons.Default.CloudUpload, contentDescription = "Sync to Cloud", tint = Color.Black)
+                            Icon(Icons.Default.CloudUpload, contentDescription = "Sync to Cloud")
                             Spacer(modifier = Modifier.width(8.dp))
                             Text("Sync Now", fontWeight = FontWeight.Bold)
                         }
@@ -410,7 +410,7 @@ fun SettingsScreen(
                                 variant = iOSButtonVariant.Accent, accentColor = PrimaryViolet,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.FileDownload, contentDescription = "Export", tint = Color.Black)
+                                Icon(Icons.Default.FileDownload, contentDescription = "Export")
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Export JSON")
                             }
@@ -419,7 +419,7 @@ fun SettingsScreen(
                                 variant = iOSButtonVariant.Accent, accentColor = SecondaryTeal,
                                 modifier = Modifier.weight(1f)
                             ) {
-                                Icon(Icons.Default.FileUpload, contentDescription = "Import", tint = Color.Black)
+                                Icon(Icons.Default.FileUpload, contentDescription = "Import")
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Restore JSON")
                             }

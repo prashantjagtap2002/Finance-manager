@@ -32,7 +32,7 @@ private data class BottomTab(
     val icon: ImageVector
 )
 
-// iOS-style tab bar icons (SF Symbols appearance)
+// Bottom navigation destinations.
 private val bottomTabs = listOf(
     BottomTab(Dashboard, "Home", Icons.Outlined.Home),
     BottomTab(Budget, "Budget", Icons.Outlined.AccountBalance),
@@ -67,7 +67,7 @@ fun MainNavigation(
                 enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
-                // Use iOS-style tab bar with translucent background
+                // Compact bottom navigation shared by top-level destinations.
                 iOSTabBar(
                     selectedTab = selectedTabIndex,
                     onTabSelected = { index ->

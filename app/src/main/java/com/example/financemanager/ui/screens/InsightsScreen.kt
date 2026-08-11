@@ -3,6 +3,7 @@ package com.example.financemanager.ui.screens
 import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
@@ -12,6 +13,13 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.FileDownload
+import androidx.compose.material.icons.filled.Category
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.Spring
@@ -25,13 +33,23 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -224,23 +242,12 @@ fun InsightsScreen(
 
     // 1. Category breakdown (drives the donut chart)
     val defaultColor = TextPrimary
-    val categoryBreakdown = remember(filteredExpenses, categories, defaultColor) {
+    val palette = ChartPalette
+    val categoryBreakdown = remember(filteredExpenses, categories, defaultColor, palette) {
         val map = mutableMapOf<Long, Double>()
         filteredExpenses.forEach {
             map[it.categoryId] = (map[it.categoryId] ?: 0.0) + it.amount
         }
-
-        // Vibrant palette for the pie chart
-        val palette = listOf(
-            Color(0xFF3B82F6), // Blue
-            Color(0xFF10B981), // Green
-            Color(0xFFF59E0B), // Yellow/Orange
-            Color(0xFFEC4899), // Pink
-            Color(0xFF8B5CF6), // Purple
-            Color(0xFFEF4444), // Red
-            Color(0xFF14B8A6), // Teal
-            Color(0xFFF97316)  // Orange
-        )
 
         val shares = map.mapNotNull { entry ->
             val cat = categories.firstOrNull { it.id == entry.key } ?: return@mapNotNull null
@@ -389,8 +396,9 @@ fun InsightsScreen(
             ) {
                 DynamicDateFilter.values().forEach { filter ->
                     val isSelected = currentFilterType == filter
+                    val isDark = LocalThemeIsDark.current
                     val bgColor by animateColorAsState(
-                        targetValue = if (isSelected) PrimaryViolet else DeepBackground,
+                        targetValue = if (isSelected) PrimaryViolet else SubtleSurface,
                         animationSpec = spring(
                             dampingRatio = Spring.DampingRatioMediumBouncy,
                             stiffness = Spring.StiffnessLow
@@ -398,7 +406,7 @@ fun InsightsScreen(
                         label = "pill_bg"
                     )
                     val textColor by animateColorAsState(
-                        targetValue = if (isSelected) DeepBackground else TextPrimary,
+                        targetValue = if (isSelected) OnAccent else TextSecondary,
                         animationSpec = spring(
                             dampingRatio = Spring.DampingRatioNoBouncy,
                             stiffness = Spring.StiffnessLow
@@ -450,44 +458,63 @@ fun InsightsScreen(
                         }
                         
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    periodOffset--
-                                    selectedDayTimestamp = null
-                                },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowBack,
-                                    contentDescription = "Previous Period",
-                                    tint = TextSecondary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = dateText,
-                                style = com.example.financemanager.theme.Typography.titleSmall.copy(color = TextSecondary)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            IconButton(
-                                onClick = {
-                                    if (periodOffset < 0) {
+                            if (currentFilterType != DynamicDateFilter.CUSTOM) {
+                                IconButton(
+                                    onClick = {
                                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        periodOffset++
+                                        periodOffset--
                                         selectedDayTimestamp = null
-                                    }
-                                },
-                                enabled = periodOffset < 0,
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    Icons.AutoMirrored.Filled.ArrowForward,
-                                    contentDescription = "Next Period",
-                                    tint = if (periodOffset < 0) TextSecondary else TextMuted,
-                                    modifier = Modifier.size(16.dp)
+                                    },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowBack,
+                                        contentDescription = "Previous Period",
+                                        tint = TextSecondary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = dateText,
+                                    style = com.example.financemanager.theme.Typography.titleSmall.copy(color = TextSecondary)
                                 )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                IconButton(
+                                    onClick = {
+                                        if (periodOffset < 0) {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            periodOffset++
+                                            selectedDayTimestamp = null
+                                        }
+                                    },
+                                    enabled = periodOffset < 0,
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.AutoMirrored.Filled.ArrowForward,
+                                        contentDescription = "Next Period",
+                                        tint = if (periodOffset < 0) TextSecondary else TextMuted,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = dateText,
+                                    style = com.example.financemanager.theme.Typography.titleSmall.copy(color = TextSecondary)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                IconButton(
+                                    onClick = { showDatePicker = true },
+                                    modifier = Modifier.size(24.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.CalendarMonth,
+                                        contentDescription = "Edit custom range",
+                                        tint = SecondaryTeal,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -556,6 +583,24 @@ fun InsightsScreen(
                     }
                 }
                 
+                // 0.5. Daily Amount Line Graph (straight lines, tap a point to read the amount)
+                item {
+                    iOSCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        style = iOSCardStyle.Grouped
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            DailyAmountLineChart(
+                                expenses = periodExpenses,
+                                allTransactions = transactions,
+                                currentBalance = currentBalance,
+                                rangeStart = rangeStart,
+                                rangeEnd = rangeEnd
+                            )
+                        }
+                    }
+                }
+
                 // 1. Donut Chart Card
                 item {
                     iOSCard(
@@ -637,6 +682,37 @@ fun InsightsScreen(
                     }
                 }
 
+                // 1.5. Income vs. Expense Comparison Chart Card
+                item {
+                    iOSCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        style = iOSCardStyle.Grouped
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            IncomeVsExpenseComparisonChart(
+                                income = filteredIncome,
+                                expense = totalExpense
+                            )
+                        }
+                    }
+                }
+
+                // 1.8. Cumulative Cash Flow Trajectory Curve Card
+                item {
+                    iOSCard(
+                        modifier = Modifier.fillMaxWidth(),
+                        style = iOSCardStyle.Grouped
+                    ) {
+                        Column(modifier = Modifier.padding(20.dp)) {
+                            CumulativeCashFlowTrendChart(
+                                expenses = periodExpenses,
+                                rangeStart = rangeStart,
+                                rangeEnd = rangeEnd
+                            )
+                        }
+                    }
+                }
+
                 // 2. Key Insights Card
                 item {
                     iOSCard(
@@ -644,8 +720,19 @@ fun InsightsScreen(
                         style = iOSCardStyle.Grouped
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
-                            Text("Key Insights", style = com.example.financemanager.theme.Typography.titleMedium.copy(color = TextPrimary))
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Lightbulb,
+                                    contentDescription = null,
+                                    tint = PrimaryViolet,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text("Key Insights", style = com.example.financemanager.theme.Typography.titleMedium.copy(color = TextPrimary))
+                            }
+                            Spacer(modifier = Modifier.height(14.dp))
 
                             if (filteredExpenses.isEmpty()) {
                                 Text(
@@ -653,59 +740,25 @@ fun InsightsScreen(
                                     style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextMuted)
                                 )
                             } else {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier.padding(vertical = 4.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(PrimaryViolet)
-                                    )
-                                    Text(
-                                        "Your peak spending day is ${peakDayAndCategory.first}.",
-                                        style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextPrimary)
-                                    )
-                                }
-
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier.padding(vertical = 4.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(SecondaryTeal)
-                                    )
-                                    Text(
-                                        "You spend the most on ${peakDayAndCategory.second}.",
-                                        style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextPrimary)
-                                    )
-                                }
+                                InsightRow(
+                                    icon = Icons.Default.CalendarMonth,
+                                    tint = PrimaryViolet,
+                                    text = "Your peak spending day is ${peakDayAndCategory.first}."
+                                )
+                                InsightRow(
+                                    icon = Icons.Default.Category,
+                                    tint = SecondaryTeal,
+                                    text = "You spend the most on ${peakDayAndCategory.second}."
+                                )
                             }
 
                             // Narrative comparison vs previous period
                             narrativeInsights.forEach { (text, isPositive) ->
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier.padding(vertical = 4.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .clip(CircleShape)
-                                            .background(if (isPositive) AccentGreen else WarningAmber)
-                                    )
-                                    Text(
-                                        text,
-                                        style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextPrimary)
-                                    )
-                                }
+                                InsightRow(
+                                    icon = if (isPositive) Icons.Default.CheckCircle else Icons.Default.Info,
+                                    tint = if (isPositive) AccentGreen else WarningAmber,
+                                    text = text
+                                )
                             }
                         }
                     }
@@ -735,6 +788,17 @@ fun InsightsScreen(
                                     style = com.example.financemanager.theme.Typography.labelLarge.copy(color = TextSecondary)
                                 )
                             }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            LinearProgressIndicator(
+                                progress = { achievements.count { it.unlocked }.toFloat() / achievements.size.toFloat() },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(5.dp)
+                                    .clip(RoundedCornerShape(3.dp)),
+                                color = WarningAmber,
+                                trackColor = BorderColor.copy(alpha = 0.4f),
+                                strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                            )
                             Spacer(modifier = Modifier.height(14.dp))
                             achievements.forEach { achievement ->
                                 Row(
@@ -785,8 +849,19 @@ fun InsightsScreen(
                         style = iOSCardStyle.Grouped
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
-                            Text("Cash Flow Forecast", style = com.example.financemanager.theme.Typography.titleMedium.copy(color = TextPrimary))
-                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.AccountBalanceWallet,
+                                    contentDescription = null,
+                                    tint = AccentGreen,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text("Cash Flow Forecast", style = com.example.financemanager.theme.Typography.titleMedium.copy(color = TextPrimary))
+                            }
+                            Spacer(modifier = Modifier.height(14.dp))
                             if (periodIsInFuture) {
                                 Text(
                                     "Based on your current balance of ${moneyString(currentBalance, false)} and your spending pace this period, you're projected to have:",
@@ -906,6 +981,36 @@ fun DonutChart(
     }
 }
 
+@Composable
+private fun InsightRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color,
+    text: String
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(CircleShape)
+                .background(tint.copy(alpha = 0.14f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(16.dp))
+        }
+        Text(
+            text,
+            style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextPrimary),
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
 data class CategoryShare(val categoryId: Long, val name: String, val amount: Double, val color: Color)
 data class Achievement(val title: String, val description: String, val unlocked: Boolean)
 
@@ -915,6 +1020,48 @@ data class DayBucket(
     val fullDateStr: String,
     val amount: Double
 )
+
+/** One bucket per calendar day in [rangeStart]..[rangeEnd], holding that day's total expense. */
+private fun buildDayBuckets(
+    expenses: List<com.example.financemanager.data.Transaction>,
+    rangeStart: Long,
+    rangeEnd: Long
+): List<DayBucket> {
+    val cal = Calendar.getInstance()
+    fun startOfDay(millis: Long): Long {
+        cal.timeInMillis = millis
+        cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+
+    val dayFmtShort = SimpleDateFormat("d MMM", Locale.getDefault())
+    val dayFmtFull = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+    val dayNumFmt = SimpleDateFormat("d", Locale.getDefault())
+
+    val dayAmountMap = mutableMapOf<Long, Double>()
+    expenses.forEach { tx ->
+        val day = startOfDay(tx.date)
+        dayAmountMap[day] = (dayAmountMap[day] ?: 0.0) + tx.amount
+    }
+
+    val buckets = mutableListOf<DayBucket>()
+    var current = startOfDay(rangeStart)
+    val end = startOfDay(rangeEnd)
+    val totalDays = ((end - current) / (24 * 60 * 60 * 1000L) + 1).coerceAtLeast(1)
+
+    while (current <= end) {
+        val amt = dayAmountMap[current] ?: 0.0
+        val label = if (totalDays <= 14) dayFmtShort.format(Date(current)) else dayNumFmt.format(Date(current))
+        buckets.add(DayBucket(current, label, dayFmtFull.format(Date(current)), amt))
+
+        cal.timeInMillis = current
+        cal.add(Calendar.DAY_OF_YEAR, 1)
+        current = cal.timeInMillis
+        if (buckets.size > 730) break
+    }
+    return buckets
+}
 
 @Composable
 fun DailyExpenseBarChart(
@@ -927,42 +1074,8 @@ fun DailyExpenseBarChart(
 ) {
     val haptic = LocalHapticFeedback.current
 
-    val cal = Calendar.getInstance()
-    fun startOfDay(millis: Long): Long {
-        cal.timeInMillis = millis
-        cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
-        cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
-        return cal.timeInMillis
-    }
-
     val dayBuckets = remember(expenses, rangeStart, rangeEnd) {
-        val dayFmtShort = SimpleDateFormat("d MMM", Locale.getDefault())
-        val dayFmtFull = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
-        val dayNumFmt = SimpleDateFormat("d", Locale.getDefault())
-
-        val dayAmountMap = mutableMapOf<Long, Double>()
-        expenses.forEach { tx ->
-            val day = startOfDay(tx.date)
-            dayAmountMap[day] = (dayAmountMap[day] ?: 0.0) + tx.amount
-        }
-
-        val buckets = mutableListOf<DayBucket>()
-        var current = startOfDay(rangeStart)
-        val end = startOfDay(rangeEnd)
-        val totalDays = ((end - current) / (24 * 60 * 60 * 1000L) + 1).coerceAtLeast(1)
-
-        while (current <= end) {
-            val amt = dayAmountMap[current] ?: 0.0
-            val label = if (totalDays <= 14) dayFmtShort.format(Date(current)) else dayNumFmt.format(Date(current))
-            val fullStr = dayFmtFull.format(Date(current))
-            buckets.add(DayBucket(current, label, fullStr, amt))
-
-            cal.timeInMillis = current
-            cal.add(Calendar.DAY_OF_YEAR, 1)
-            current = cal.timeInMillis
-            if (buckets.size > 730) break
-        }
-        buckets
+        buildDayBuckets(expenses, rangeStart, rangeEnd)
     }
 
     if (dayBuckets.isEmpty()) {
@@ -1036,7 +1149,15 @@ fun DailyExpenseBarChart(
         ) {
             dayBuckets.forEachIndexed { index, bucket ->
                 val isSelected = bucket.timestamp == selectedDayTimestamp
-                val fraction = ((bucket.amount / maxScaled) * heightProgress).toFloat().coerceIn(0.04f, 1.0f)
+                val targetFraction = ((bucket.amount / maxScaled) * heightProgress).toFloat().coerceIn(0.04f, 1.0f)
+                val animatedFraction by animateFloatAsState(
+                    targetValue = targetFraction,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioMediumBouncy,
+                        stiffness = Spring.StiffnessLow
+                    ),
+                    label = "bar_frac"
+                )
 
                 val barColor = when {
                     isSelected -> AccentGreen
@@ -1080,7 +1201,7 @@ fun DailyExpenseBarChart(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth(if (isScrollable) 0.7f else 0.5f)
-                                .fillMaxHeight(fraction = fraction)
+                                .fillMaxHeight(fraction = animatedFraction)
                                 .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
                                 .background(barColor)
                         )
@@ -1105,6 +1226,788 @@ fun DailyExpenseBarChart(
                             )
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+enum class LineSeriesMode(val label: String) {
+    TOTAL_AMOUNT("Total Amount"),
+    DAILY_SPEND("Daily Spend")
+}
+
+/**
+ * End-of-day total balance across all accounts for every day in the range, reconstructed
+ * backwards from the live balance. Returns the day series plus the opening balance
+ * (the total just before the first charted day).
+ */
+private fun buildBalanceSeries(
+    allTransactions: List<com.example.financemanager.data.Transaction>,
+    currentBalance: Double,
+    rangeStart: Long,
+    rangeEnd: Long
+): Pair<List<DayBucket>, Double> {
+    val days = buildDayBuckets(emptyList(), rangeStart, rangeEnd)
+    if (days.isEmpty()) return emptyList<DayBucket>() to currentBalance
+
+    val cal = Calendar.getInstance()
+    fun startOfDay(millis: Long): Long {
+        cal.timeInMillis = millis
+        cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
+        cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+        return cal.timeInMillis
+    }
+    fun net(tx: com.example.financemanager.data.Transaction) = when (tx.type) {
+        TransactionType.INCOME -> tx.amount
+        TransactionType.EXPENSE -> -tx.amount
+        TransactionType.TRANSFER -> 0.0 // moves money between own accounts, total is unchanged
+    }
+
+    val firstDayStart = days.first().timestamp
+    val lastDayEnd = days.last().timestamp + (24L * 60 * 60 * 1000) - 1
+
+    val netByDay = mutableMapOf<Long, Double>()
+    var netAfterWindow = 0.0
+    allTransactions.forEach { tx ->
+        when {
+            tx.date > lastDayEnd -> netAfterWindow += net(tx)
+            tx.date >= firstDayStart -> {
+                val day = startOfDay(tx.date)
+                netByDay[day] = (netByDay[day] ?: 0.0) + net(tx)
+            }
+            // anything before the window is already baked into the current balance
+        }
+    }
+
+    // Walk backwards from today's balance to get each day's closing total
+    val balances = DoubleArray(days.size)
+    var running = currentBalance - netAfterWindow
+    for (i in days.indices.reversed()) {
+        balances[i] = running
+        running -= netByDay[days[i].timestamp] ?: 0.0
+    }
+
+    return days.mapIndexed { i, day -> day.copy(amount = balances[i]) } to running
+}
+
+/**
+ * Straight-line (polyline) graph with two series: the running total across all accounts
+ * (rising and falling segments colour-coded, so it reads as "when did my money go up/down")
+ * and the per-day spend. Tap any point to pin it and read the exact amount and change;
+ * the line draws itself left-to-right whenever the data, mode, or period changes.
+ */
+@Composable
+fun DailyAmountLineChart(
+    expenses: List<com.example.financemanager.data.Transaction>,
+    allTransactions: List<com.example.financemanager.data.Transaction>,
+    currentBalance: Double,
+    rangeStart: Long,
+    rangeEnd: Long,
+    modifier: Modifier = Modifier
+) {
+    val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
+
+    var mode by remember { mutableStateOf(LineSeriesMode.TOTAL_AMOUNT) }
+
+    val spendBuckets = remember(expenses, rangeStart, rangeEnd) {
+        buildDayBuckets(expenses, rangeStart, rangeEnd)
+    }
+    val balanceSeries = remember(allTransactions, currentBalance, rangeStart, rangeEnd) {
+        buildBalanceSeries(allTransactions, currentBalance, rangeStart, rangeEnd)
+    }
+
+    val isBalanceMode = mode == LineSeriesMode.TOTAL_AMOUNT
+    val dayBuckets = if (isBalanceMode) balanceSeries.first else spendBuckets
+    val openingValue = if (isBalanceMode) balanceSeries.second else 0.0
+
+    // Day-over-day movement of the plotted series (first point compares to the opening value)
+    val deltas = remember(dayBuckets, openingValue) {
+        dayBuckets.mapIndexed { index, bucket ->
+            bucket.amount - (if (index == 0) openingValue else dayBuckets[index - 1].amount)
+        }
+    }
+    val biggestRiseIndex = deltas.indices.maxByOrNull { deltas[it] }?.takeIf { deltas[it] > 0.0 }
+    val biggestDropIndex = deltas.indices.minByOrNull { deltas[it] }?.takeIf { deltas[it] < 0.0 }
+    val netChange = if (dayBuckets.isEmpty()) 0.0 else dayBuckets.last().amount - openingValue
+
+    // When the account was at its highest / lowest inside the period
+    val peakIndex = dayBuckets.indices.maxByOrNull { dayBuckets[it].amount }
+    val lowIndex = dayBuckets.indices.minByOrNull { dayBuckets[it].amount }
+
+    var selectedIndex by remember(dayBuckets) { mutableIntStateOf(-1) }
+
+    // Left-to-right reveal, replayed on every data / period change
+    var isVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(dayBuckets) {
+        isVisible = false
+        selectedIndex = -1
+        kotlinx.coroutines.delay(50)
+        isVisible = true
+    }
+    val sweep by animateFloatAsState(
+        targetValue = if (isVisible) 1f else 0f,
+        animationSpec = tween(durationMillis = 900, easing = EaseOutCubic),
+        label = "line_sweep"
+    )
+
+    val upColor = AccentGreen
+    val downColor = AlertRed
+    val spendColor = SecondaryTeal
+    val trendColor = if (!isBalanceMode) spendColor else if (netChange >= 0) upColor else downColor
+    val markerColor = PrimaryViolet
+    val gridColor = BorderColor.copy(alpha = 0.35f)
+    val fillBrush = Brush.verticalGradient(
+        colors = listOf(trendColor.copy(alpha = 0.24f), trendColor.copy(alpha = 0f))
+    )
+    val tooltipBg = SubtleSurface
+
+    val totalSpend = spendBuckets.sumOf { it.amount }
+    val hasData = if (isBalanceMode) dayBuckets.isNotEmpty() else totalSpend > 0.0
+    val selected = dayBuckets.getOrNull(selectedIndex)
+    val selectedDelta = deltas.getOrNull(selectedIndex) ?: 0.0
+
+    fun signedMoney(value: Double): String =
+        (if (value >= 0) "+" else "−") + moneyString(kotlin.math.abs(value), false)
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(
+                    Icons.AutoMirrored.Filled.ShowChart,
+                    contentDescription = null,
+                    tint = trendColor,
+                    modifier = Modifier.size(20.dp)
+                )
+                Text(
+                    if (isBalanceMode) "Total Amount Trend" else "Daily Amount Line",
+                    style = Typography.titleMedium.copy(color = TextPrimary)
+                )
+            }
+            if (hasData) {
+                Text(
+                    text = when {
+                        selected != null -> moneyString(selected.amount, false)
+                        isBalanceMode -> signedMoney(netChange)
+                        else -> moneyString(totalSpend, false)
+                    },
+                    style = Typography.labelMedium.copy(
+                        color = if (selected != null) markerColor else trendColor,
+                        fontWeight = FontWeight.Bold
+                    )
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Series switch
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            LineSeriesMode.values().forEach { seriesMode ->
+                val isActive = mode == seriesMode
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(if (isActive) PrimaryViolet else SubtleSurface)
+                        .clickable {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            mode = seriesMode
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        seriesMode.label,
+                        style = Typography.labelSmall.copy(
+                            color = if (isActive) OnAccent else TextSecondary,
+                            fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+                        )
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Text(
+            text = when {
+                selected != null && isBalanceMode ->
+                    "${selected.fullDateStr} • ${moneyString(selected.amount, false)} (${signedMoney(selectedDelta)} that day)"
+                selected != null -> "${selected.fullDateStr} • ${moneyString(selected.amount, false)}"
+                isBalanceMode -> "Tap any point to see your total on that day"
+                else -> "Tap any point to see that day's amount"
+            },
+            style = Typography.labelSmall.copy(color = if (selected != null) TextSecondary else TextMuted)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (!hasData) {
+            Box(modifier = Modifier.fillMaxWidth().height(120.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    if (isBalanceMode) "No account balance to chart for this period."
+                    else "No spending recorded for the selected period.",
+                    style = Typography.bodyMedium.copy(color = TextMuted)
+                )
+            }
+            return
+        }
+
+        // Balance can rise and fall, so it is scaled between its own low and high;
+        // daily spend always sits on a zero baseline.
+        val highValue = dayBuckets.maxOf { it.amount }
+        val lowValue = if (isBalanceMode) dayBuckets.minOf { it.amount } else 0.0
+        val valueSpan = (highValue - lowValue).coerceAtLeast(1.0)
+
+        BoxWithConstraints(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(170.dp)
+        ) {
+            val widthPx = with(density) { maxWidth.toPx() }
+            val heightPx = with(density) { maxHeight.toPx() }
+            val sidePad = with(density) { 8.dp.toPx() }
+            val topPad = with(density) { 14.dp.toPx() }
+            val bottomPad = with(density) { 10.dp.toPx() }
+            val plotW = (widthPx - sidePad * 2).coerceAtLeast(1f)
+            val plotH = (heightPx - topPad - bottomPad).coerceAtLeast(1f)
+            // Balance lines keep a little headroom top and bottom so peaks stay readable
+            val vInset = if (isBalanceMode) plotH * 0.08f else 0f
+
+            val points = remember(dayBuckets, widthPx, heightPx, highValue, lowValue) {
+                dayBuckets.mapIndexed { index, bucket ->
+                    val x = if (dayBuckets.size == 1) sidePad + plotW / 2f
+                    else sidePad + plotW * index / (dayBuckets.size - 1).toFloat()
+                    val usableH = plotH - vInset * 2
+                    val y = topPad + vInset + usableH -
+                        ((bucket.amount - lowValue) / valueSpan).toFloat() * usableH
+                    Offset(x, y)
+                }
+            }
+
+            Canvas(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(points) {
+                        detectTapGestures { tap ->
+                            val nearest = points.indices.minByOrNull { kotlin.math.abs(points[it].x - tap.x) }
+                            if (nearest != null) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                selectedIndex = if (nearest == selectedIndex) -1 else nearest
+                            }
+                        }
+                    }
+            ) {
+                val baseline = topPad + plotH
+
+                // Horizontal guide lines
+                for (i in 0..2) {
+                    val y = topPad + plotH * i / 2f
+                    drawLine(
+                        color = gridColor,
+                        start = Offset(sidePad, y),
+                        end = Offset(sidePad + plotW, y),
+                        strokeWidth = 1.dp.toPx()
+                    )
+                }
+
+                if (points.size == 1) {
+                    drawCircle(color = trendColor, radius = 5.dp.toPx(), center = points[0])
+                    return@Canvas
+                }
+
+                // Straight segments, revealed left-to-right
+                val progressed = (sweep * (points.size - 1)).coerceIn(0f, (points.size - 1).toFloat())
+                val fullSegments = kotlin.math.floor(progressed).toInt()
+                val fraction = progressed - fullSegments
+
+                var tipX = points[0].x
+                var tipY = points[0].y
+                val linePath = Path().apply {
+                    moveTo(points[0].x, points[0].y)
+                    for (i in 1..fullSegments) {
+                        lineTo(points[i].x, points[i].y)
+                        tipX = points[i].x
+                        tipY = points[i].y
+                    }
+                    if (fullSegments < points.size - 1 && fraction > 0f) {
+                        val from = points[fullSegments]
+                        val to = points[fullSegments + 1]
+                        tipX = from.x + (to.x - from.x) * fraction
+                        tipY = from.y + (to.y - from.y) * fraction
+                        lineTo(tipX, tipY)
+                    }
+                }
+
+                val fillPath = Path().apply {
+                    addPath(linePath)
+                    lineTo(tipX, baseline)
+                    lineTo(points[0].x, baseline)
+                    close()
+                }
+
+                drawPath(fillPath, brush = fillBrush)
+
+                val strokePx = 2.5f.dp.toPx()
+                if (isBalanceMode) {
+                    // Colour each straight segment by direction: green where the total rose, red where it fell
+                    for (i in 1..fullSegments) {
+                        drawLine(
+                            color = if (points[i].y <= points[i - 1].y) upColor else downColor,
+                            start = points[i - 1],
+                            end = points[i],
+                            strokeWidth = strokePx,
+                            cap = StrokeCap.Round
+                        )
+                    }
+                    if (fullSegments < points.size - 1 && fraction > 0f) {
+                        val from = points[fullSegments]
+                        drawLine(
+                            color = if (tipY <= from.y) upColor else downColor,
+                            start = from,
+                            end = Offset(tipX, tipY),
+                            strokeWidth = strokePx,
+                            cap = StrokeCap.Round
+                        )
+                    }
+                } else {
+                    drawPath(
+                        linePath,
+                        color = spendColor,
+                        style = Stroke(width = strokePx, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    )
+                }
+
+                // Dots on revealed points (hidden when the range is too dense to read)
+                if (points.size <= 40) {
+                    points.forEachIndexed { index, point ->
+                        if (point.x <= tipX + 0.5f && index != selectedIndex) {
+                            val dotColor = if (isBalanceMode) {
+                                if (deltas[index] >= 0) upColor else downColor
+                            } else spendColor
+                            drawCircle(color = dotColor, radius = 3.dp.toPx(), center = point)
+                        }
+                    }
+                }
+
+                // Mark the high point, the low point and the sharpest single-day fall
+                if (isBalanceMode) {
+                    val dropPt = biggestDropIndex?.let { points.getOrNull(it) }
+                    if (dropPt != null && dropPt.x <= tipX + 0.5f && biggestDropIndex != selectedIndex) {
+                        drawCircle(
+                            color = downColor.copy(alpha = 0.75f),
+                            radius = 6.dp.toPx(),
+                            center = dropPt,
+                            style = Stroke(width = 1.5f.dp.toPx())
+                        )
+                    }
+                    listOf(peakIndex to upColor, lowIndex to downColor).forEach { (idx, markColor) ->
+                        val pt = idx?.let { points.getOrNull(it) }
+                        if (pt != null && pt.x <= tipX + 0.5f && idx != selectedIndex) {
+                            drawCircle(color = markColor.copy(alpha = 0.22f), radius = 10.dp.toPx(), center = pt)
+                            drawCircle(color = markColor, radius = 4.5f.dp.toPx(), center = pt)
+                        }
+                    }
+                }
+
+                // Selected point marker
+                val sel = points.getOrNull(selectedIndex)
+                if (sel != null) {
+                    drawLine(
+                        color = markerColor.copy(alpha = 0.55f),
+                        start = Offset(sel.x, topPad),
+                        end = Offset(sel.x, baseline),
+                        strokeWidth = 1.5f.dp.toPx(),
+                        pathEffect = PathEffect.dashPathEffect(
+                            floatArrayOf(6.dp.toPx(), 6.dp.toPx())
+                        )
+                    )
+                    drawCircle(color = markerColor.copy(alpha = 0.25f), radius = 10.dp.toPx(), center = sel)
+                    drawCircle(color = markerColor, radius = 5.dp.toPx(), center = sel)
+                }
+            }
+
+            // "High"/"Low" callouts so the peak and the bottom are readable without tapping
+            if (isBalanceMode && points.size > 1 && highValue - lowValue > 0.0) {
+                listOf(
+                    Triple(peakIndex, upColor, "High"),
+                    Triple(lowIndex, downColor, "Low")
+                ).forEach { (idx, tagColor, tag) ->
+                    val pt = idx?.let { points.getOrNull(it) }
+                    val bucket = idx?.let { dayBuckets.getOrNull(it) }
+                    if (pt != null && bucket != null && idx != selectedIndex) {
+                        var tagSize by remember(tag) { mutableStateOf(IntSize.Zero) }
+                        val gapPx = with(density) { 13.dp.toPx() }
+                        val above = tag == "High"
+                        Text(
+                            text = "$tag ${moneyString(bucket.amount, false)}",
+                            style = Typography.labelSmall.copy(
+                                color = tagColor,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            maxLines = 1,
+                            modifier = Modifier
+                                .offset {
+                                    val x = (pt.x - tagSize.width / 2f)
+                                        .coerceIn(0f, (widthPx - tagSize.width).coerceAtLeast(0f))
+                                    val y = (if (above) pt.y - tagSize.height - gapPx else pt.y + gapPx)
+                                        .coerceIn(0f, (heightPx - tagSize.height).coerceAtLeast(0f))
+                                    IntOffset(x.toInt(), y.toInt())
+                                }
+                                .onGloballyPositioned { tagSize = it.size }
+                        )
+                    }
+                }
+            }
+
+            // Tooltip pinned above the selected point
+            val selPoint = points.getOrNull(selectedIndex)
+            if (selPoint != null && selected != null) {
+                var tipSize by remember { mutableStateOf(IntSize.Zero) }
+                val gapPx = with(density) { 12.dp.toPx() }
+                Column(
+                    modifier = Modifier
+                        .offset {
+                            val x = (selPoint.x - tipSize.width / 2f)
+                                .coerceIn(0f, (widthPx - tipSize.width).coerceAtLeast(0f))
+                            val y = (selPoint.y - tipSize.height - gapPx)
+                                .coerceIn(0f, (heightPx - tipSize.height).coerceAtLeast(0f))
+                            IntOffset(x.toInt(), y.toInt())
+                        }
+                        .onGloballyPositioned { tipSize = it.size }
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(tooltipBg)
+                        .border(1.dp, BorderColor.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(
+                        selected.fullDateStr,
+                        style = Typography.labelSmall.copy(color = TextSecondary, fontSize = 9.sp),
+                        maxLines = 1
+                    )
+                    Text(
+                        moneyString(selected.amount, false),
+                        style = Typography.labelMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold),
+                        maxLines = 1
+                    )
+                    if (isBalanceMode) {
+                        Text(
+                            signedMoney(selectedDelta),
+                            style = Typography.labelSmall.copy(
+                                color = if (selectedDelta >= 0) upColor else downColor,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold
+                            ),
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+
+        // X axis: first / middle / last day labels
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            val labels = when {
+                dayBuckets.size == 1 -> listOf(dayBuckets.first().label)
+                dayBuckets.size == 2 -> listOf(dayBuckets.first().label, dayBuckets.last().label)
+                else -> listOf(
+                    dayBuckets.first().label,
+                    dayBuckets[dayBuckets.size / 2].label,
+                    dayBuckets.last().label
+                )
+            }
+            labels.forEach { label ->
+                Text(
+                    label,
+                    style = Typography.labelSmall.copy(color = TextMuted, fontSize = 9.sp),
+                    maxLines = 1
+                )
+            }
+        }
+
+        // When the total moved the most, and where it ended up
+        if (isBalanceMode) {
+            Spacer(modifier = Modifier.height(6.dp))
+
+            val peakIdx = peakIndex
+            if (peakIdx != null) {
+                MovementRow(
+                    icon = Icons.Default.ArrowUpward,
+                    tint = upColor,
+                    text = "Highest total ${moneyString(dayBuckets[peakIdx].amount, false)} on ${dayBuckets[peakIdx].fullDateStr}"
+                )
+            }
+            val lowIdx = lowIndex
+            if (lowIdx != null && lowIdx != peakIdx) {
+                MovementRow(
+                    icon = Icons.Default.ArrowDownward,
+                    tint = downColor,
+                    text = "Lowest total ${moneyString(dayBuckets[lowIdx].amount, false)} on ${dayBuckets[lowIdx].fullDateStr}"
+                )
+            }
+            val riseIdx = biggestRiseIndex
+            if (riseIdx != null) {
+                MovementRow(
+                    icon = Icons.AutoMirrored.Filled.TrendingUp,
+                    tint = upColor,
+                    text = "Biggest rise ${signedMoney(deltas[riseIdx])} on ${dayBuckets[riseIdx].fullDateStr}"
+                )
+            }
+            val dropIdx = biggestDropIndex
+            if (dropIdx != null) {
+                MovementRow(
+                    icon = Icons.AutoMirrored.Filled.TrendingDown,
+                    tint = downColor,
+                    text = "Biggest drop ${signedMoney(deltas[dropIdx])} on ${dayBuckets[dropIdx].fullDateStr}"
+                )
+            }
+            MovementRow(
+                icon = if (netChange >= 0) Icons.AutoMirrored.Filled.TrendingUp else Icons.AutoMirrored.Filled.TrendingDown,
+                tint = if (netChange >= 0) upColor else downColor,
+                text = "Over this period your total went ${if (netChange >= 0) "up" else "down"} " +
+                    "${moneyString(kotlin.math.abs(netChange), false)} — from ${moneyString(openingValue, false)} " +
+                    "to ${moneyString(dayBuckets.last().amount, false)}"
+            )
+        }
+    }
+}
+
+@Composable
+private fun MovementRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color,
+    text: String
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 3.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+        Text(
+            text,
+            style = Typography.labelSmall.copy(color = TextSecondary),
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+fun IncomeVsExpenseComparisonChart(
+    income: Double,
+    expense: Double,
+    modifier: Modifier = Modifier
+) {
+    val maxVal = maxOf(1.0, maxOf(income, expense))
+    val incomeRatio = (income / maxVal).toFloat().coerceIn(0.05f, 1f)
+    val expenseRatio = (expense / maxVal).toFloat().coerceIn(0.05f, 1f)
+
+    val animatedIncomeRatio by animateFloatAsState(
+        targetValue = incomeRatio,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "inc_ratio"
+    )
+    val animatedExpenseRatio by animateFloatAsState(
+        targetValue = expenseRatio,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
+        label = "exp_ratio"
+    )
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("Cash Flow Comparison", style = Typography.titleMedium.copy(color = TextPrimary))
+            val net = income - expense
+            val chipColor = if (net >= 0) AccentGreen else AlertRed
+            Text(
+                text = if (net >= 0) "+${moneyString(net, false)}" else moneyString(net, false),
+                style = Typography.labelMedium.copy(color = chipColor, fontWeight = FontWeight.Bold)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(130.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.Bottom
+        ) {
+            // Income Bar
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(36.dp)
+                            .fillMaxHeight(animatedIncomeRatio)
+                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                            .background(AccentGreen)
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("Income", style = Typography.labelSmall.copy(color = TextSecondary))
+                Text(moneyString(income, false), style = Typography.labelSmall.copy(color = AccentGreen, fontWeight = FontWeight.Bold))
+            }
+
+            // Expense Bar
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1f).fillMaxHeight()
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(36.dp)
+                            .fillMaxHeight(animatedExpenseRatio)
+                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                            .background(AlertRed)
+                    )
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text("Expenses", style = Typography.labelSmall.copy(color = TextSecondary))
+                Text(moneyString(expense, false), style = Typography.labelSmall.copy(color = AlertRed, fontWeight = FontWeight.Bold))
+            }
+        }
+    }
+}
+
+@Composable
+fun CumulativeCashFlowTrendChart(
+    expenses: List<com.example.financemanager.data.Transaction>,
+    rangeStart: Long,
+    rangeEnd: Long,
+    modifier: Modifier = Modifier
+) {
+    val dayBuckets = remember(expenses, rangeStart, rangeEnd) {
+        val cal = Calendar.getInstance()
+        fun startOfDay(m: Long): Long {
+            cal.timeInMillis = m
+            cal.set(Calendar.HOUR_OF_DAY, 0); cal.set(Calendar.MINUTE, 0)
+            cal.set(Calendar.SECOND, 0); cal.set(Calendar.MILLISECOND, 0)
+            return cal.timeInMillis
+        }
+        val dayMap = mutableMapOf<Long, Double>()
+        expenses.forEach { tx ->
+            val day = startOfDay(tx.date)
+            dayMap[day] = (dayMap[day] ?: 0.0) + tx.amount
+        }
+        val list = mutableListOf<Double>()
+        var curr = startOfDay(rangeStart)
+        val end = startOfDay(rangeEnd)
+        var cumulative = 0.0
+        while (curr <= end) {
+            cumulative += dayMap[curr] ?: 0.0
+            list.add(cumulative)
+            cal.timeInMillis = curr
+            cal.add(Calendar.DAY_OF_YEAR, 1)
+            curr = cal.timeInMillis
+            if (list.size > 365) break
+        }
+        list
+    }
+
+    val hasData = dayBuckets.isNotEmpty() && dayBuckets.any { it > 0.0 }
+    val maxVal = dayBuckets.lastOrNull()?.coerceAtLeast(1.0) ?: 1.0
+    val linePrimaryColor = PrimaryViolet
+    val fillGradient = Brush.verticalGradient(
+        colors = listOf(PrimaryViolet.copy(alpha = 0.35f), PrimaryViolet.copy(alpha = 0.0f))
+    )
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Icon(Icons.AutoMirrored.Filled.ShowChart, contentDescription = null, tint = PrimaryViolet, modifier = Modifier.size(20.dp))
+                Text("Cumulative Spend Trajectory", style = Typography.titleMedium.copy(color = TextPrimary))
+            }
+            if (hasData) {
+                Text(
+                    text = moneyString(dayBuckets.last(), false),
+                    style = Typography.labelMedium.copy(color = PrimaryViolet, fontWeight = FontWeight.Bold)
+                )
+            }
+        }
+        Spacer(modifier = Modifier.height(12.dp))
+
+        if (!hasData) {
+            Box(modifier = Modifier.fillMaxWidth().height(100.dp), contentAlignment = Alignment.Center) {
+                Text(
+                    "No spending recorded for the selected period.",
+                    style = Typography.bodyMedium.copy(color = TextMuted)
+                )
+            }
+            return
+        }
+
+        Box(modifier = Modifier.fillMaxWidth().height(120.dp)) {
+            Canvas(modifier = Modifier.fillMaxSize()) {
+                val width = size.width
+                val height = size.height
+                val points = dayBuckets.mapIndexed { idx, valAmt ->
+                    val x = (idx.toFloat() / (dayBuckets.size - 1).coerceAtLeast(1)) * width
+                    val y = height - ((valAmt / maxVal).toFloat() * height * 0.85f)
+                    Offset(x, y)
+                }
+
+                if (points.size > 1) {
+                    val path = Path().apply {
+                        moveTo(points[0].x, points[0].y)
+                        for (i in 1 until points.size) {
+                            val prev = points[i - 1]
+                            val curr = points[i]
+                            val controlX1 = prev.x + (curr.x - prev.x) / 2f
+                            val controlY1 = prev.y
+                            val controlX2 = prev.x + (curr.x - prev.x) / 2f
+                            val controlY2 = curr.y
+                            cubicTo(controlX1, controlY1, controlX2, controlY2, curr.x, curr.y)
+                        }
+                    }
+
+                    val fillPath = Path().apply {
+                        addPath(path)
+                        lineTo(width, height)
+                        lineTo(0f, height)
+                        close()
+                    }
+
+                    drawPath(fillPath, brush = fillGradient)
+                    drawPath(path, color = linePrimaryColor, style = Stroke(width = 3.dp.toPx()))
+
+                    val lastPt = points.last()
+                    drawCircle(color = linePrimaryColor, radius = 5.dp.toPx(), center = lastPt)
                 }
             }
         }

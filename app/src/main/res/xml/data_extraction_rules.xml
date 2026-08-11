@@ -5,15 +5,11 @@
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <!-- Holds the Supabase access/refresh tokens in plaintext; excluded so a restored
+             cloud backup can't be used to resume another device's cloud session. -->
+        <exclude domain="sharedpref" path="supabase_session.xml"/>
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="sharedpref" path="supabase_session.xml"/>
     </device-transfer>
-    -->
 </data-extraction-rules>

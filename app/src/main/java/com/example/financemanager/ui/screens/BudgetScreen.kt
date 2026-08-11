@@ -64,8 +64,9 @@ fun BudgetScreen(
     var showAddCategoryDialog by remember { mutableStateOf(false) }
     var showTransferDialog by remember { mutableStateOf(false) }
 
-    // Dialog state for editing a category limit
+    // Dialog state for editing a category limit & rollover
     var categoryToEditLimit by remember { mutableStateOf<Category?>(null) }
+    var categoryToUpdateRollover by remember { mutableStateOf<Category?>(null) }
     var editLimitInput by remember { mutableStateOf("") }
     
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -125,8 +126,8 @@ fun BudgetScreen(
                         .border(1.dp, BorderColor, RoundedCornerShape(12.dp)),
                     colors = CardDefaults.cardColors(
                         containerColor = when {
-                            leftToAssign == 0.0 && totalIncome > 0 -> Color(0xFF102E23) // Solid Green hue
-                            leftToAssign < 0.0 -> Color(0xFF3B1D21) // Red hue
+                            leftToAssign == 0.0 && totalIncome > 0 -> SuccessSoft
+                            leftToAssign < 0.0 -> ErrorSoft
                             else -> DarkSurface
                         }
                     )
@@ -311,7 +312,15 @@ fun BudgetScreen(
                                         leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = SecondaryTeal) }
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Delete", color = AlertRed) },
+                                        text = { Text("Update Rollover", color = AccentGreen) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            categoryToUpdateRollover = category
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.Autorenew, contentDescription = null, tint = AccentGreen) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Delete Envelope", color = AlertRed) },
                                         onClick = {
                                             menuExpanded = false
                                             viewModel.deleteCategory(category)
@@ -517,6 +526,46 @@ fun BudgetScreen(
             },
             dismissButton = {
                 TextButton(onClick = { categoryToEditLimit = null }) {
+                    Text("Cancel", color = TextSecondary)
+                }
+            },
+            containerColor = DarkSurface
+        )
+    }
+
+    categoryToUpdateRollover?.let { category ->
+        var rolloverInput by remember { mutableStateOf(category.rolloverAmount.toInt().toString()) }
+        AlertDialog(
+            onDismissRequest = { categoryToUpdateRollover = null },
+            title = { Text("Update Rollover Funds", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("Add or update extra rollover funds carried into '${category.name}'.", style = Typography.bodySmall.copy(color = TextSecondary))
+                    OutlinedTextField(
+                        value = rolloverInput,
+                        onValueChange = { rolloverInput = it },
+                        label = { Text("Rollover Funds (₹)") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                iOSButton(
+                    onClick = {
+                        val valInput = rolloverInput.toDoubleOrNull() ?: 0.0
+                        viewModel.updateCategory(category.copy(rolloverAmount = valInput))
+                        categoryToUpdateRollover = null
+                    },
+                    variant = iOSButtonVariant.Accent,
+                    accentColor = AccentGreen
+                ) {
+                    Text("Update")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { categoryToUpdateRollover = null }) {
                     Text("Cancel", color = TextSecondary)
                 }
             },

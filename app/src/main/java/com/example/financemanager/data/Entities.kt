@@ -1,6 +1,7 @@
 package com.example.financemanager.data
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
 enum class AccountType {
@@ -104,7 +105,7 @@ data class Debt(
     val minimumPayment: Double? = null
 )
 
-@Entity(tableName = "sms_transactions")
+@Entity(tableName = "sms_transactions", indices = [Index(value = ["smsHash"], unique = true)])
 data class SmsTransaction(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val smsHash: String,
