@@ -67,6 +67,7 @@ fun BudgetScreen(
     // Dialog state for editing a category limit & rollover
     var categoryToEditLimit by remember { mutableStateOf<Category?>(null) }
     var categoryToUpdateRollover by remember { mutableStateOf<Category?>(null) }
+    var categoryToDelete by remember { mutableStateOf<Category?>(null) }
     var editLimitInput by remember { mutableStateOf("") }
     
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -144,11 +145,11 @@ fun BudgetScreen(
                         ) {
                             Column {
                                 Text("Monthly Income", style = Typography.labelMedium.copy(color = TextSecondary))
-                                Text(moneyString(totalIncome, false), style = Typography.titleLarge.copy(color = AccentGreen))
+                                Text(moneyString(totalIncome), style = Typography.titleLarge.copy(color = AccentGreen))
                             }
                             Column(horizontalAlignment = Alignment.End) {
                                 Text("Envelope Budgets", style = Typography.labelMedium.copy(color = TextSecondary))
-                                Text(moneyString(totalAllocated, false), style = Typography.titleLarge.copy(color = PrimaryViolet))
+                                Text(moneyString(totalAllocated), style = Typography.titleLarge.copy(color = PrimaryViolet))
                             }
                         }
                         Spacer(modifier = Modifier.height(16.dp))
@@ -165,13 +166,13 @@ fun BudgetScreen(
                             leftToAssign < 0.0 -> {
                                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Icon(Icons.Default.Error, contentDescription = "Over allocated", tint = AlertRed)
-                                    Text("Over-allocated by ${moneyString(-leftToAssign, false)}. Reduce category limits.", style = Typography.bodyMedium.copy(color = AlertRed))
+                                    Text("Over-allocated by ${moneyString(-leftToAssign)}. Reduce category limits.", style = Typography.bodyMedium.copy(color = AlertRed))
                                 }
                             }
                             else -> {
                                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                                     Text(
-                                        "${moneyString(leftToAssign, false)} left to assign",
+                                        "${moneyString(leftToAssign)} left to assign",
                                         style = Typography.titleMedium.copy(color = WarningAmber, fontWeight = FontWeight.Bold)
                                     )
                                     Text("Assign remaining income to envelopes to achieve a zero-based budget.", style = Typography.bodyMedium.copy(color = TextSecondary))
@@ -279,7 +280,7 @@ fun BudgetScreen(
                             Column {
                                 Text(category.name, style = Typography.titleMedium.copy(color = TextPrimary))
                                 if (category.rolloverAmount > 0.0) {
-                                    Text("Rolled Over: ${moneyString(category.rolloverAmount, false)}", style = Typography.labelMedium.copy(color = AccentGreen))
+                                    Text("Rolled Over: ${moneyString(category.rolloverAmount)}", style = Typography.labelMedium.copy(color = AccentGreen))
                                 }
                             }
                         }
@@ -289,7 +290,7 @@ fun BudgetScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Text(
-                                moneyString(category.budgetLimit, false),
+                                moneyString(category.budgetLimit),
                                 style = Typography.titleMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
                             )
                             
@@ -323,7 +324,7 @@ fun BudgetScreen(
                                         text = { Text("Delete Envelope", color = AlertRed) },
                                         onClick = {
                                             menuExpanded = false
-                                            viewModel.deleteCategory(category)
+                                            categoryToDelete = category
                                         },
                                         leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = AlertRed) }
                                     )
@@ -339,6 +340,15 @@ fun BudgetScreen(
                 Spacer(modifier = Modifier.height(48.dp))
             }
         }
+    }
+
+    categoryToDelete?.let { category ->
+        DeleteCategoryDialog(
+            category = category,
+            categories = categories,
+            viewModel = viewModel,
+            onDismiss = { categoryToDelete = null }
+        )
     }
 
     if (showTransferDialog) {
@@ -722,7 +732,7 @@ private fun SelectableEnvelopeRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(category.name, style = Typography.bodyMedium.copy(color = TextPrimary))
-            Text(moneyString(category.budgetLimit, false), style = Typography.labelMedium.copy(color = TextSecondary))
+            Text(moneyString(category.budgetLimit), style = Typography.labelMedium.copy(color = TextSecondary))
         }
     }
 }

@@ -27,7 +27,63 @@ class FinanceRepository(private val dao: FinanceDao) {
     
     suspend fun updateCategories(categories: List<Category>) = dao.updateCategories(categories)
     
-    suspend fun deleteCategory(category: Category) = dao.deleteCategory(category)
+    suspend fun countTransactionsInCategory(categoryId: Long): Int =
+        dao.countTransactionsInCategory(categoryId)
+
+    /**
+     * Deletes a category after re-pointing everything that referenced it at [reassignToCategoryId]
+     * (0 meaning uncategorised). Deleting the row on its own used to leave its transactions on a
+     * dangling id: they disappeared from every category breakdown while still counting toward the
+     * expense total, so Insights silently stopped adding up.
+     */
+    suspend fun deleteCategory(category: Category, reassignToCategoryId: Long) {
+        dao.reassignTransactionCategory(category.id, reassignToCategoryId)
+        dao.reassignRecurringCategory(category.id, reassignToCategoryId)
+        if (reassignToCategoryId > 0L) {
+            dao.reassignMerchantRuleCategory(category.id, reassignToCategoryId)
+        } else {
+            // A learned rule pointing at "uncategorised" would teach nothing.
+            dao.deleteMerchantRulesForCategory(category.id)
+        }
+        dao.deleteCategory(category)
+    }
+
+    suspend fun getTransactionsForAccount(accountId: Long): List<Transaction> =
+        dao.getTransactionsForAccount(accountId)
+
+    /**
+     * Deletes an account by merging it into [targetAccountId]: its transactions, templates and
+     * rules move across, and the target absorbs both its balance and its opening balance, which
+     * keeps `balance == openingBalance + transactions` true on the other side.
+     */
+    suspend fun mergeAndDeleteAccount(account: Account, targetAccountId: Long) {
+        val target = dao.getAccountById(targetAccountId) ?: return
+        dao.reassignTransactionSourceAccount(account.id, targetAccountId)
+        dao.reassignTransactionDestinationAccount(account.id, targetAccountId)
+        dao.reassignRecurringAccount(account.id, targetAccountId)
+        dao.reassignMerchantRuleAccount(account.id, targetAccountId)
+        dao.reassignSmsAccount(account.id, targetAccountId)
+        dao.updateAccount(
+            target.copy(
+                balance = target.balance + account.balance,
+                openingBalance = target.openingBalance + account.openingBalance
+            )
+        )
+        dao.deleteAccount(account)
+    }
+
+    /**
+     * Deletes an account along with its history. Each transaction goes back through the ledger so
+     * that transfers give the money back to the account on the other side instead of leaving it
+     * short.
+     */
+    suspend fun deleteAccountWithTransactions(account: Account) {
+        dao.getTransactionsForAccount(account.id).forEach { AccountLedger.revoke(dao, it) }
+        dao.reassignRecurringAccount(account.id, 0L)
+        dao.reassignMerchantRuleAccount(account.id, 0L)
+        dao.reassignSmsAccount(account.id, 0L)
+        dao.deleteAccount(account)
+    }
 
     // Transactions
     val transactions: Flow<List<Transaction>> = dao.getTransactionsFlow()
@@ -42,7 +98,11 @@ class FinanceRepository(private val dao: FinanceDao) {
     
     suspend fun getTransactionById(id: Long): Transaction? = dao.getTransactionById(id)
     
-    suspend fun insertTransaction(transaction: Transaction): Long = dao.insertTransaction(transaction)
+    /**
+     * Records a transaction and moves the affected account balances with it. Callers must not
+     * adjust balances themselves — see [AccountLedger].
+     */
+    suspend fun insertTransaction(transaction: Transaction): Long = AccountLedger.post(dao, transaction)
 
     /**
      * Checks if a transaction with the same key fields already exists to prevent duplicates.
@@ -54,28 +114,36 @@ class FinanceRepository(private val dao: FinanceDao) {
 
     /**
      * Inserts a transaction only if no duplicate exists. Returns the ID of the inserted
-     * transaction or the existing transaction if a duplicate was found.
+     * transaction, or of the existing one if a duplicate was found — in which case balances are
+     * left alone.
      */
-    suspend fun insertTransactionIfNotExists(transaction: Transaction): Long {
-        val existing = findDuplicateTransaction(
-            transaction.amount,
-            transaction.type.name,
-            transaction.categoryId,
-            transaction.sourceAccountId,
-            transaction.date
-        )
-        return if (existing != null) {
-            existing.id
-        } else {
-            dao.insertTransaction(transaction)
-        }
-    }
-    
-    suspend fun updateTransaction(transaction: Transaction) {
-        dao.updateTransaction(transaction)
+    suspend fun insertTransactionIfNotExists(transaction: Transaction): Long =
+        AccountLedger.postIfNew(dao, transaction)
+
+    /** Edits a transaction, rolling its old balance effect back and the new one forward. */
+    suspend fun updateTransaction(oldTransaction: Transaction, newTransaction: Transaction) {
+        AccountLedger.amend(dao, oldTransaction, newTransaction)
     }
 
-    suspend fun deleteTransaction(transaction: Transaction) = dao.deleteTransaction(transaction)
+    suspend fun deleteTransaction(transaction: Transaction) = AccountLedger.revoke(dao, transaction)
+
+    /**
+     * Writes a transaction verbatim without moving any balance. Only for bulk restores, where the
+     * accounts are being written back with their final balances already in them — replaying each
+     * transaction through the ledger there would apply every movement a second time.
+     */
+    suspend fun insertTransactionFromBackup(transaction: Transaction): Long =
+        dao.insertTransaction(transaction)
+
+    /** See [AccountLedger.postSideEffect]. */
+    suspend fun postLedgerSideEffect(accountId: Long, amount: Double, note: String, date: Long): Long =
+        AccountLedger.postSideEffect(dao, accountId, amount, note, date)
+
+    /** Repairs balances that disagree with their transactions; returns what was corrected. */
+    suspend fun reconcileBalances(): List<BalanceDrift> = AccountLedger.reconcile(dao)
+
+    /** Re-anchors opening balances so the current balances become the ledger's truth. */
+    suspend fun rebaseOpeningBalances() = AccountLedger.rebaseOpeningBalances(dao)
 
     // Recurring Transactions
     val recurringTransactions: Flow<List<RecurringTransaction>> = dao.getRecurringTransactionsFlow()
@@ -120,6 +188,7 @@ class FinanceRepository(private val dao: FinanceDao) {
         dao.clearSavingsGoals()
         dao.clearDebts()
         dao.clearSmsTransactions()
+        dao.clearMerchantRules()
     }
 
     // Debts
@@ -146,4 +215,33 @@ class FinanceRepository(private val dao: FinanceDao) {
     suspend fun updateSmsTransaction(smsTransaction: SmsTransaction) = dao.updateSmsTransaction(smsTransaction)
 
     suspend fun deleteSmsTransaction(smsTransaction: SmsTransaction) = dao.deleteSmsTransaction(smsTransaction)
+
+    // Merchant → category rules
+    val merchantRules: Flow<List<MerchantRule>> = dao.getMerchantRulesFlow()
+
+    suspend fun getMerchantRule(key: String): MerchantRule? = dao.getMerchantRule(key)
+
+    suspend fun upsertMerchantRule(rule: MerchantRule) = dao.upsertMerchantRule(rule)
+
+    suspend fun deleteMerchantRule(key: String) = dao.deleteMerchantRule(key)
+
+    /**
+     * Records the category (and account) a merchant was filed under. Called on every approval, so
+     * a merchant that keeps landing in the same category climbs [MerchantRule.hitCount] and a
+     * re-categorisation simply overwrites the old answer.
+     */
+    suspend fun rememberMerchantCategory(merchant: String, categoryId: Long, accountId: Long) {
+        val key = MerchantKey.normalize(merchant)
+        if (key.isEmpty() || categoryId <= 0L) return
+        val existing = dao.getMerchantRule(key)
+        dao.upsertMerchantRule(
+            MerchantRule(
+                merchantKey = key,
+                categoryId = categoryId,
+                accountId = accountId,
+                hitCount = if (existing?.categoryId == categoryId) existing.hitCount + 1 else 1,
+                updatedAt = System.currentTimeMillis()
+            )
+        )
+    }
 }

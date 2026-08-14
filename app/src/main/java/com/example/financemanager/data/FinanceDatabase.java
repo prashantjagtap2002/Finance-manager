@@ -10,8 +10,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
 import androidx.room.migration.Migration;
 
 @Database(
-    entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class},
-    version = 12,
+    entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class, MerchantRule.class},
+    version = 14,
     exportSchema = false
 )
 @TypeConverters({Converters.class})
@@ -142,6 +142,39 @@ public abstract class FinanceDatabase extends RoomDatabase {
         }
     };
 
+    // Remembers the category a merchant was filed under so repeat SMS alerts arrive
+    // pre-categorised instead of asking the user again every time.
+    static final Migration MIGRATION_12_13 = new Migration(12, 13) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "CREATE TABLE IF NOT EXISTS `merchant_rules` (" +
+                "`merchantKey` TEXT PRIMARY KEY NOT NULL, " +
+                "`categoryId` INTEGER NOT NULL, " +
+                "`accountId` INTEGER NOT NULL DEFAULT 0, " +
+                "`hitCount` INTEGER NOT NULL DEFAULT 1, " +
+                "`updatedAt` INTEGER NOT NULL DEFAULT 0)"
+            );
+        }
+    };
+
+    // Adds the anchor for the ledger invariant. Existing balances are taken as correct and the
+    // opening balance is derived to match, so upgrading never moves anybody's numbers — from here
+    // on AccountLedger keeps the two in step.
+    static final Migration MIGRATION_13_14 = new Migration(13, 14) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL("ALTER TABLE accounts ADD COLUMN openingBalance REAL NOT NULL DEFAULT 0");
+            database.execSQL(
+                "UPDATE accounts SET openingBalance = balance" +
+                " - COALESCE((SELECT SUM(CASE WHEN t.type = 'INCOME' THEN t.amount ELSE -t.amount END)" +
+                "   FROM transactions t WHERE t.sourceAccountId = accounts.id), 0)" +
+                " - COALESCE((SELECT SUM(t.amount) FROM transactions t" +
+                "   WHERE t.destinationAccountId = accounts.id AND t.type = 'TRANSFER'), 0)"
+            );
+        }
+    };
+
     public static FinanceDatabase getDatabase(final Context context, final kotlinx.coroutines.CoroutineScope scope) {
         if (INSTANCE == null) {
             synchronized (FinanceDatabase.class) {
@@ -151,7 +184,7 @@ public abstract class FinanceDatabase extends RoomDatabase {
                         FinanceDatabase.class,
                         "finance_database"
                     )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
                     .addCallback(new RoomDatabase.Callback() {
                         @Override
                         public void onCreate(@NonNull SupportSQLiteDatabase db) {

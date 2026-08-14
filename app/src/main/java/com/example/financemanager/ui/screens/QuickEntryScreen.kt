@@ -468,7 +468,7 @@ fun QuickEntryScreen(
                             result.items.take(4).forEach { item ->
                                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                                     Text(item.first, style = Typography.bodyMedium.copy(color = TextSecondary))
-                                    Text(moneyString(item.second, false), style = Typography.bodyMedium.copy(color = TextPrimary))
+                                    Text(moneyString(item.second), style = Typography.bodyMedium.copy(color = TextPrimary))
                                 }
                             }
                             TextButton(

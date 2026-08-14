@@ -4,19 +4,24 @@ import android.app.Application
 import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.financemanager.core.AppLock
 import com.example.financemanager.core.FinancePreferences
 import com.example.financemanager.core.PayCycleFrequency
 import com.example.financemanager.core.ThemePreference
 import com.example.financemanager.data.*
 import com.example.financemanager.data.remote.SupabaseManager
+import com.example.financemanager.domain.BalanceDrift
 import com.example.financemanager.domain.FinanceRepository
 import com.example.financemanager.services.NotificationHelper
 import com.example.financemanager.services.SyncWorker
+import com.example.financemanager.domain.MerchantKey
 import com.example.financemanager.domain.NlpParser
 import com.example.financemanager.domain.NlpResult
 import com.example.financemanager.ui.components.moneyString
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileWriter
 import android.net.Uri
@@ -76,21 +81,22 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     private val _payCycleAnchorDay = MutableStateFlow(1)
     val payCycleAnchorDay: StateFlow<Int> = _payCycleAnchorDay.asStateFlow()
 
-    private val _isAppLocked = MutableStateFlow(false)
-    val isAppLocked: StateFlow<Boolean> = _isAppLocked.asStateFlow()
-
-    private val _securityPin = MutableStateFlow("")
-    val securityPin: StateFlow<String> = _securityPin.asStateFlow()
-
     val cashflowWarning: StateFlow<String?>
 
-    // Privacy mode: masks balances across the app (persisted)
+    // Privacy mode: masks balances across the app. FinancePreferences owns the value (moneyString
+    // reads it directly); this flow just mirrors it for screens that drive a toggle off it.
     private val _isPrivacyMode = MutableStateFlow(false)
     val isPrivacyMode: StateFlow<Boolean> = _isPrivacyMode.asStateFlow()
 
-    // App lock preference (biometric prompt on launch, persisted)
+    // App lock preferences. AppLock owns these; the flows just mirror it for the Settings screen.
     private val _isAppLockEnabled = MutableStateFlow(true)
     val isAppLockEnabled: StateFlow<Boolean> = _isAppLockEnabled.asStateFlow()
+
+    private val _hasSecurityPin = MutableStateFlow(false)
+    val hasSecurityPin: StateFlow<Boolean> = _hasSecurityPin.asStateFlow()
+
+    private val _appLockTimeoutMs = MutableStateFlow(0L)
+    val appLockTimeoutMs: StateFlow<Long> = _appLockTimeoutMs.asStateFlow()
 
     // Calculator Keypad States
     private val _amountInput = MutableStateFlow("0")
@@ -99,6 +105,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     // Cloud sync (Supabase). Holds the anonymous user id once signed in, null otherwise.
     private val _cloudUserId = MutableStateFlow<String?>(null)
     val cloudUserId: StateFlow<String?> = _cloudUserId.asStateFlow()
+
+    // Learned merchant → category rules, keyed by MerchantKey.normalize(merchant)
+    val merchantRules: StateFlow<Map<String, MerchantRule>>
 
     // SMS Transactions
     val smsTransactions: StateFlow<List<SmsTransaction>>
@@ -121,6 +130,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             debtList.groupBy { it.personName.trim().lowercase() }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
+        merchantRules = repository.merchantRules
+            .map { rules -> rules.associateBy { it.merchantKey } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
         smsTransactions = repository.smsTransactions
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
@@ -134,8 +147,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
         // Restore persisted UI preferences
-        _isPrivacyMode.value = prefs.getBoolean("privacy_mode", false)
-        _isAppLockEnabled.value = prefs.getBoolean("app_lock_enabled", true)
+        AppLock.init(application)
+        _isPrivacyMode.value = FinancePreferences.privacyMode
+        _isAppLockEnabled.value = AppLock.isEnabled
+        _hasSecurityPin.value = AppLock.hasPin
+        _appLockTimeoutMs.value = AppLock.timeoutMs
         _isProUser.value = FinancePreferences.isProUserFlow.value
         _themePreference.value = FinancePreferences.themeModeFlow.value
         _currencyCode.value = FinancePreferences.currencyCodeFlow.value
@@ -360,35 +376,38 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun remainingFreeScans(): Int = FinancePreferences.remainingFreeScans()
 
     // --- Security PIN Actions ---
-    fun setSecurityPin(pin: String) {
-        _securityPin.value = pin
-        _isAppLocked.value = pin.isNotEmpty()
-    }
 
-    fun unlockApp(enteredPin: String): Boolean {
-        return if (enteredPin == _securityPin.value) {
-            _isAppLocked.value = false
-            true
-        } else {
-            false
+    /** Stores a new unlock PIN. Hashing is slow by design, so it runs off the main thread. */
+    fun setSecurityPin(pin: String, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            withContext(Dispatchers.Default) { AppLock.setPin(pin) }
+            _hasSecurityPin.value = AppLock.hasPin
+            onDone()
         }
     }
 
-    fun lockApp() {
-        if (_securityPin.value.isNotEmpty()) {
-            _isAppLocked.value = true
-        }
+    fun clearSecurityPin() {
+        AppLock.clearPin()
+        _hasSecurityPin.value = AppLock.hasPin
+    }
+
+    fun lockApp() = AppLock.lockNow()
+
+    fun setAppLockTimeout(millis: Long) {
+        AppLock.setTimeoutMs(millis)
+        _appLockTimeoutMs.value = AppLock.timeoutMs
     }
 
     // --- Privacy Mode & App Lock Preferences ---
     fun togglePrivacyMode() {
-        _isPrivacyMode.value = !_isPrivacyMode.value
-        prefs.edit().putBoolean("privacy_mode", _isPrivacyMode.value).apply()
+        val enabled = !_isPrivacyMode.value
+        FinancePreferences.setPrivacyMode(enabled)
+        _isPrivacyMode.value = enabled
     }
 
     fun setAppLockEnabled(enabled: Boolean) {
-        _isAppLockEnabled.value = enabled
-        prefs.edit().putBoolean("app_lock_enabled", enabled).apply()
+        AppLock.setEnabled(enabled)
+        _isAppLockEnabled.value = AppLock.isEnabled
     }
 
     // --- Date & Streak Helpers ---
@@ -518,9 +537,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             repository.updateSavingsGoal(updated)
 
             if (fromAccountId != null) {
-                repository.getAccountById(fromAccountId)?.let { acc ->
-                    repository.updateAccount(acc.copy(balance = acc.balance - amount))
-                }
+                // The transfer itself debits the account — the ledger handles that.
                 repository.insertTransaction(
                     Transaction(
                         amount = amount,
@@ -588,31 +605,23 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     // --- Undo support: restore a just-deleted transaction ---
     fun restoreTransaction(transaction: Transaction) {
         viewModelScope.launch {
+            // Re-inserting re-applies the balance effect that deleting it backed out.
             repository.insertTransaction(transaction)
-
-            // Re-apply source account balance impact
-            val account = repository.getAccountById(transaction.sourceAccountId)
-            if (account != null) {
-                val newBalance = when (transaction.type) {
-                    TransactionType.EXPENSE, TransactionType.TRANSFER -> account.balance - transaction.amount
-                    TransactionType.INCOME -> account.balance + transaction.amount
-                }
-                repository.updateAccount(account.copy(balance = newBalance))
-            }
-
-            // Re-apply destination account balance impact if transfer
-            if (transaction.type == TransactionType.TRANSFER && transaction.destinationAccountId != null) {
-                val destAccount = repository.getAccountById(transaction.destinationAccountId)
-                if (destAccount != null) {
-                    repository.updateAccount(destAccount.copy(balance = destAccount.balance + transaction.amount))
-                }
-            }
         }
     }
 
+    /**
+     * Saves an edited account. When the user corrects the balance by hand the opening balance
+     * absorbs the difference, so the correction sticks instead of being undone by the next
+     * reconciliation.
+     */
     fun updateAccount(account: Account) {
         viewModelScope.launch {
-            repository.updateAccount(account)
+            val existing = repository.getAccountById(account.id)
+            val correction = if (existing != null) account.balance - existing.balance else 0.0
+            repository.updateAccount(
+                account.copy(openingBalance = account.openingBalance + correction)
+            )
         }
     }
 
@@ -624,44 +633,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     fun updateTransaction(oldTransaction: Transaction, newTransaction: Transaction) {
         viewModelScope.launch {
-            // 1. Revert old transaction balance impact (Source)
-            val oldAccount = repository.getAccountById(oldTransaction.sourceAccountId)
-            if (oldAccount != null) {
-                val revertedBalance = when (oldTransaction.type) {
-                    TransactionType.EXPENSE, TransactionType.TRANSFER -> oldAccount.balance + oldTransaction.amount
-                    TransactionType.INCOME -> oldAccount.balance - oldTransaction.amount
-                }
-                repository.updateAccount(oldAccount.copy(balance = revertedBalance))
-            }
-
-            // 2. Revert old transaction balance impact (Destination if transfer)
-            if (oldTransaction.type == TransactionType.TRANSFER && oldTransaction.destinationAccountId != null) {
-                val oldDestAccount = repository.getAccountById(oldTransaction.destinationAccountId)
-                if (oldDestAccount != null) {
-                    repository.updateAccount(oldDestAccount.copy(balance = oldDestAccount.balance - oldTransaction.amount))
-                }
-            }
-
-            // 3. Apply new transaction balance impact (Source)
-            val newAccount = repository.getAccountById(newTransaction.sourceAccountId)
-            if (newAccount != null) {
-                val newBalance = when (newTransaction.type) {
-                    TransactionType.EXPENSE, TransactionType.TRANSFER -> newAccount.balance - newTransaction.amount
-                    TransactionType.INCOME -> newAccount.balance + newTransaction.amount
-                }
-                repository.updateAccount(newAccount.copy(balance = newBalance))
-            }
-
-            // 4. Apply new transaction balance impact (Destination if transfer)
-            if (newTransaction.type == TransactionType.TRANSFER && newTransaction.destinationAccountId != null) {
-                val newDestAccount = repository.getAccountById(newTransaction.destinationAccountId)
-                if (newDestAccount != null) {
-                    repository.updateAccount(newDestAccount.copy(balance = newDestAccount.balance + newTransaction.amount))
-                }
-            }
-
-            // 5. Save updated transaction
-            repository.updateTransaction(newTransaction)
+            repository.updateTransaction(oldTransaction, newTransaction)
         }
     }
 
@@ -774,22 +746,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 )
             )
 
-            val sourceAccount = repository.getAccountById(accountId)
-            if (sourceAccount != null) {
-                val newBalance = when (type) {
-                    TransactionType.EXPENSE, TransactionType.TRANSFER -> sourceAccount.balance - amount
-                    TransactionType.INCOME -> sourceAccount.balance + amount
-                }
-                repository.updateAccount(sourceAccount.copy(balance = newBalance))
-            }
-
-            // 3. Adjust destination account balance if transfer
-            if (type == TransactionType.TRANSFER && destinationAccountId != null) {
-                val destinationAccount = repository.getAccountById(destinationAccountId)
-                if (destinationAccount != null) {
-                    repository.updateAccount(destinationAccount.copy(balance = destinationAccount.balance + amount))
-                }
-            }
+            // 2/3. Balances (source, and destination for transfers) moved by the ledger insert above.
 
             // 3.5 Fire envelope budget alert if this expense crosses 80%/100%
             if (type == TransactionType.EXPENSE) {
@@ -850,9 +807,18 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     )
                 )
             }
-            // Deduct totalAmount from account
-            repository.getAccountById(accountId)?.let { acc ->
-                repository.updateAccount(acc.copy(balance = acc.balance - totalAmount))
+
+            // Each split debited the account as it was recorded. If the splits don't cover the
+            // whole bill, the remainder still left the account, so post it as a transfer rather
+            // than adjusting the balance behind the ledger's back.
+            val unallocated = totalAmount - splits.sumOf { it.second }
+            if (kotlin.math.abs(unallocated) > 0.005) {
+                repository.postLedgerSideEffect(
+                    accountId = accountId,
+                    amount = unallocated,
+                    note = note.ifEmpty { "Unallocated split remainder" },
+                    date = date
+                )
             }
 
             // Budget alerts per envelope touched by the split
@@ -866,29 +832,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     fun deleteTransaction(transaction: Transaction) {
         viewModelScope.launch {
+            // Backs the balance effect out of the accounts the transaction actually touched. The
+            // old code fell back to "the first account" when the source was gone, which credited
+            // an unrelated account.
             repository.deleteTransaction(transaction)
-            
-            // Revert source account balance impact
-            val currentAccounts = accounts.value
-            val account = currentAccounts.firstOrNull { it.id == transaction.sourceAccountId }
-                ?: currentAccounts.firstOrNull()
-
-            if (account != null) {
-                val revertedBalance = when (transaction.type) {
-                    TransactionType.EXPENSE, TransactionType.TRANSFER -> account.balance + transaction.amount
-                    TransactionType.INCOME -> account.balance - transaction.amount
-                }
-                repository.updateAccount(account.copy(balance = revertedBalance))
-            }
-
-            // Revert destination account balance impact if transfer
-            if (transaction.type == TransactionType.TRANSFER && transaction.destinationAccountId != null) {
-                val destAccount = currentAccounts.firstOrNull { it.id == transaction.destinationAccountId }
-                if (destAccount != null) {
-                    repository.updateAccount(destAccount.copy(balance = destAccount.balance - transaction.amount))
-                }
-            }
-
             SyncWorker.enqueueNow(getApplication())
         }
     }
@@ -907,7 +854,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun logAndSplitRecurring(rec: RecurringTransaction, friendName: String, friendShare: Double) {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            // 1. Insert expense transaction (full amount)
+            // 1. Log the user's own share as the expense
             val splitGroupId = java.util.UUID.randomUUID().toString()
             repository.insertTransaction(
                 Transaction(
@@ -930,9 +877,15 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     notes = "Split for ${rec.note.ifEmpty { "Subscription" }}"
                 )
             )
-            // 3. Deduct total from account
-            repository.getAccountById(rec.accountId)?.let { acc ->
-                repository.updateAccount(acc.copy(balance = acc.balance - rec.amount))
+            // 3. The friend's share left the account too, so it needs a ledger entry — as a
+            // transfer, which moves the balance without counting as the user's spending.
+            if (friendShare > 0) {
+                repository.postLedgerSideEffect(
+                    accountId = rec.accountId,
+                    amount = friendShare,
+                    note = "Lent to $friendName for ${rec.note.ifEmpty { "Subscription" }}",
+                    date = now
+                )
             }
             // 4. Advance execution date
             val cal = Calendar.getInstance().apply { timeInMillis = rec.nextExecutionDate }
@@ -1021,9 +974,41 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun deleteCategory(category: Category) {
+    /**
+     * Deletes an envelope, moving anything filed under it to [reassignToCategoryId] — 0 leaves
+     * those transactions uncategorised, which still keeps them out of the wrong envelope and in
+     * the totals.
+     */
+    fun deleteCategory(category: Category, reassignToCategoryId: Long = 0L) {
         viewModelScope.launch {
-            repository.deleteCategory(category)
+            repository.deleteCategory(category, reassignToCategoryId)
+            SyncWorker.enqueueNow(getApplication())
+        }
+    }
+
+    /** How many transactions would be affected by deleting [categoryId]. */
+    fun countTransactionsInCategory(categoryId: Long, onResult: (Int) -> Unit) {
+        viewModelScope.launch { onResult(repository.countTransactionsInCategory(categoryId)) }
+    }
+
+    /** How many transactions reference [accountId] on either side. */
+    fun countTransactionsForAccount(accountId: Long, onResult: (Int) -> Unit) {
+        viewModelScope.launch { onResult(repository.getTransactionsForAccount(accountId).size) }
+    }
+
+    /**
+     * Deletes an account. With [moveToAccountId] the account is merged into that one, history and
+     * balance included; without it the account's transactions are deleted too, unwinding each one
+     * through the ledger so the far side of any transfer is made whole.
+     */
+    fun deleteAccount(account: Account, moveToAccountId: Long?) {
+        viewModelScope.launch {
+            if (moveToAccountId != null && moveToAccountId != account.id) {
+                repository.mergeAndDeleteAccount(account, moveToAccountId)
+            } else {
+                repository.deleteAccountWithTransactions(account)
+            }
+            SyncWorker.enqueueNow(getApplication())
         }
     }
 
@@ -1071,8 +1056,26 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun createAccount(name: String, type: AccountType, initialBalance: Double) {
         viewModelScope.launch {
             repository.insertAccount(
-                Account(name = name, type = type, balance = initialBalance)
+                // A brand-new account has no transactions, so its opening balance is its balance.
+                Account(
+                    name = name,
+                    type = type,
+                    balance = initialBalance,
+                    openingBalance = initialBalance
+                )
             )
+        }
+    }
+
+    /**
+     * Recomputes every account balance from its transactions and repairs any that had drifted.
+     * Reports what changed so the user can see whether anything was actually wrong.
+     */
+    fun reconcileBalances(onDone: (List<BalanceDrift>) -> Unit) {
+        viewModelScope.launch {
+            val drifts = repository.reconcileBalances()
+            if (drifts.isNotEmpty()) SyncWorker.enqueueNow(getApplication())
+            onDone(drifts)
         }
     }
 
@@ -1197,12 +1200,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 isAutoLogged = true,
                 merchantName = merchants[index]
             )
-            // Use duplicate-safe insertion
+            // Duplicate-safe: the balance only moves when a row is actually inserted.
             repository.insertTransactionIfNotExists(transaction)
-
-            if (targetAccount != null) {
-                repository.updateAccount(targetAccount.copy(balance = targetAccount.balance - amount))
-            }
         }
     }
 
@@ -1476,13 +1475,18 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 // Wipe existing database and restore backup
                 repository.clearAllTables()
 
-                // Insert all elements back
+                // Insert all elements back. Transactions bypass the ledger here — the accounts
+                // above were restored with their closing balances already baked in, so replaying
+                // each transaction would apply every movement twice.
                 accountsList.forEach { repository.insertAccount(it) }
                 categoriesList.forEach { repository.insertCategory(it) }
-                transactionsList.forEach { repository.insertTransaction(it) }
+                transactionsList.forEach { repository.insertTransactionFromBackup(it) }
                 recurringList.forEach { repository.insertRecurringTransaction(it) }
                 goalsList.forEach { repository.insertSavingsGoal(it) }
                 debtsList.forEach { repository.insertDebt(it) }
+
+                // Older backups have no opening balances, so derive them from what was restored.
+                repository.rebaseOpeningBalances()
 
                 onSuccess()
             } catch (e: Exception) {
@@ -1537,17 +1541,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             )
             repository.updateDebt(updatedDebt)
 
-            // Update Account Balance
-            val newBalance = if (debt.type == DebtType.LENT) {
-                // "Owe Me" -> they pay me back -> account gets money
-                account.balance + paymentAmount
-            } else {
-                // "I Owe" -> I pay them back -> account loses money
-                account.balance - paymentAmount
-            }
-            repository.updateAccount(account.copy(balance = newBalance))
-
-            // Log Transaction
+            // Logging the payment moves the balance: money in when they repay a loan you made,
+            // money out when you repay one you took.
             val txType = if (debt.type == DebtType.LENT) TransactionType.INCOME else TransactionType.EXPENSE
             val transaction = Transaction(
                 amount = paymentAmount,
@@ -1568,6 +1563,20 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // --- SMS Transactions ---
+
+    /**
+     * The category and account this merchant was filed under last time, or null if it's new.
+     * Used to pre-fill the approval sheet so repeat merchants need no input at all.
+     */
+    fun learnedRuleFor(merchant: String): MerchantRule? {
+        val key = MerchantKey.normalize(merchant)
+        return if (key.isEmpty()) null else merchantRules.value[key]
+    }
+
+    fun forgetMerchantRule(merchantKey: String) {
+        viewModelScope.launch { repository.deleteMerchantRule(merchantKey) }
+    }
+
     fun approveSmsTransaction(
         smsTransaction: SmsTransaction,
         categoryId: Long,
@@ -1597,15 +1606,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 )
             )
 
-            val account = repository.getAccountById(accountId)
-            if (account != null) {
-                val newBalance = when (txType) {
-                    TransactionType.EXPENSE -> account.balance - amount
-                    TransactionType.INCOME -> account.balance + amount
-                    TransactionType.TRANSFER -> account.balance
-                }
-                repository.updateAccount(account.copy(balance = newBalance))
-            }
+            // Balance moved by the ledger insert above.
 
             repository.updateSmsTransaction(
                 smsTransaction.copy(
@@ -1615,6 +1616,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     approvedAccountId = accountId
                 )
             )
+
+            // Learn the filing decision so the next alert from this merchant arrives categorised.
+            repository.rememberMerchantCategory(smsTransaction.counterparty, categoryId, accountId)
 
             SyncWorker.enqueueNow(getApplication())
         }
@@ -1655,14 +1659,14 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Discards a parsed SMS. This only removes the inbox row — it deliberately leaves balances
+     * alone, because an unapproved SMS never moved one, and an approved one is represented by a
+     * real transaction that has to be deleted on its own to be reverted.
+     */
     fun deleteSmsTransaction(smsTransaction: SmsTransaction) {
         viewModelScope.launch {
             repository.deleteSmsTransaction(smsTransaction)
-            val primaryAccount = accounts.value.firstOrNull()
-            val parsedAmt = smsTransaction.amount.toDoubleOrNull() ?: 0.0
-            if (primaryAccount != null && parsedAmt > 0) {
-                repository.updateAccount(primaryAccount.copy(balance = primaryAccount.balance + parsedAmt))
-            }
             SyncWorker.enqueueNow(getApplication())
         }
     }

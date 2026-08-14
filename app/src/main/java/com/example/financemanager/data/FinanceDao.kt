@@ -1,26 +1,27 @@
 package com.example.financemanager.data
 
 import androidx.room.*
+import com.example.financemanager.domain.LedgerStore
 import kotlinx.coroutines.flow.Flow
 
 @Dao
-interface FinanceDao {
+interface FinanceDao : LedgerStore {
 
     // Accounts
     @Query("SELECT * FROM accounts")
     fun getAccountsFlow(): Flow<List<Account>>
 
     @Query("SELECT * FROM accounts")
-    suspend fun getAccountsList(): List<Account>
+    override suspend fun getAccountsList(): List<Account>
 
     @Query("SELECT * FROM accounts WHERE id = :id")
-    suspend fun getAccountById(id: Long): Account?
+    override suspend fun getAccountById(id: Long): Account?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAccount(account: Account): Long
 
     @Update
-    suspend fun updateAccount(account: Account)
+    override suspend fun updateAccount(account: Account)
 
     @Delete
     suspend fun deleteAccount(account: Account)
@@ -64,13 +65,68 @@ interface FinanceDao {
     suspend fun getTransactionById(id: Long): Transaction?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertTransaction(transaction: Transaction): Long
+    override suspend fun insertTransaction(transaction: Transaction): Long
 
     @Update
-    suspend fun updateTransaction(transaction: Transaction)
+    override suspend fun updateTransaction(transaction: Transaction)
 
     @Delete
-    suspend fun deleteTransaction(transaction: Transaction)
+    override suspend fun deleteTransaction(transaction: Transaction)
+
+    /**
+     * Net effect on the account that funded these transactions: income adds, expenses and
+     * outgoing transfers subtract. Summed in SQL so reconciliation doesn't have to load the
+     * whole table.
+     */
+    @Query(
+        "SELECT COALESCE(SUM(CASE WHEN type = 'INCOME' THEN amount ELSE -amount END), 0) " +
+            "FROM transactions WHERE sourceAccountId = :accountId"
+    )
+    override suspend fun sumSourceEffect(accountId: Long): Double
+
+    /** Money transferred *into* this account, which the source-side sum above doesn't see. */
+    @Query(
+        "SELECT COALESCE(SUM(amount), 0) FROM transactions " +
+            "WHERE destinationAccountId = :accountId AND type = 'TRANSFER'"
+    )
+    override suspend fun sumIncomingTransfers(accountId: Long): Double
+
+    // --- Re-pointing rows before a category or account is deleted ---
+    // Nothing here relies on foreign keys: none of the tables declare any, so a plain delete
+    // leaves rows pointing at an id that no longer exists.
+
+    @Query("SELECT COUNT(*) FROM transactions WHERE categoryId = :categoryId")
+    suspend fun countTransactionsInCategory(categoryId: Long): Int
+
+    @Query("UPDATE transactions SET categoryId = :targetId WHERE categoryId = :categoryId")
+    suspend fun reassignTransactionCategory(categoryId: Long, targetId: Long)
+
+    @Query("UPDATE recurring_transactions SET categoryId = :targetId WHERE categoryId = :categoryId")
+    suspend fun reassignRecurringCategory(categoryId: Long, targetId: Long)
+
+    @Query("UPDATE merchant_rules SET categoryId = :targetId WHERE categoryId = :categoryId")
+    suspend fun reassignMerchantRuleCategory(categoryId: Long, targetId: Long)
+
+    @Query("DELETE FROM merchant_rules WHERE categoryId = :categoryId")
+    suspend fun deleteMerchantRulesForCategory(categoryId: Long)
+
+    @Query("SELECT * FROM transactions WHERE sourceAccountId = :accountId OR destinationAccountId = :accountId")
+    suspend fun getTransactionsForAccount(accountId: Long): List<Transaction>
+
+    @Query("UPDATE transactions SET sourceAccountId = :targetId WHERE sourceAccountId = :accountId")
+    suspend fun reassignTransactionSourceAccount(accountId: Long, targetId: Long)
+
+    @Query("UPDATE transactions SET destinationAccountId = :targetId WHERE destinationAccountId = :accountId")
+    suspend fun reassignTransactionDestinationAccount(accountId: Long, targetId: Long)
+
+    @Query("UPDATE recurring_transactions SET accountId = :targetId WHERE accountId = :accountId")
+    suspend fun reassignRecurringAccount(accountId: Long, targetId: Long)
+
+    @Query("UPDATE merchant_rules SET accountId = :targetId WHERE accountId = :accountId")
+    suspend fun reassignMerchantRuleAccount(accountId: Long, targetId: Long)
+
+    @Query("UPDATE sms_transactions SET approvedAccountId = :targetId WHERE approvedAccountId = :accountId")
+    suspend fun reassignSmsAccount(accountId: Long, targetId: Long)
 
     // Recurring Transactions
     @Query("SELECT * FROM recurring_transactions")
@@ -168,7 +224,7 @@ interface FinanceDao {
 
     // Check for duplicate transactions based on key fields to prevent UNIQUE constraint errors
     @Query("SELECT * FROM transactions WHERE amount = :amount AND type = :type AND categoryId = :categoryId AND sourceAccountId = :sourceAccountId AND date = :date LIMIT 1")
-    suspend fun findDuplicateTransaction(amount: Double, type: String, categoryId: Long, sourceAccountId: Long, date: Long): Transaction?
+    override suspend fun findDuplicateTransaction(amount: Double, type: String, categoryId: Long, sourceAccountId: Long, date: Long): Transaction?
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertSmsTransaction(smsTransaction: SmsTransaction): Long
@@ -178,4 +234,20 @@ interface FinanceDao {
 
     @Delete
     suspend fun deleteSmsTransaction(smsTransaction: SmsTransaction)
+
+    // Merchant → category rules
+    @Query("SELECT * FROM merchant_rules ORDER BY hitCount DESC")
+    fun getMerchantRulesFlow(): Flow<List<MerchantRule>>
+
+    @Query("SELECT * FROM merchant_rules WHERE merchantKey = :key LIMIT 1")
+    suspend fun getMerchantRule(key: String): MerchantRule?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertMerchantRule(rule: MerchantRule)
+
+    @Query("DELETE FROM merchant_rules WHERE merchantKey = :key")
+    suspend fun deleteMerchantRule(key: String)
+
+    @Query("DELETE FROM merchant_rules")
+    suspend fun clearMerchantRules()
 }

@@ -1,6 +1,7 @@
 package com.example.financemanager.core
 
 import android.content.Context
+import androidx.compose.runtime.mutableStateOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.text.SimpleDateFormat
@@ -35,6 +36,7 @@ object FinancePreferences {
     private const val KEY_SCAN_COUNT = "scan_count"
     private const val KEY_PAY_CYCLE_FREQUENCY = "pay_cycle_frequency"
     private const val KEY_PAY_CYCLE_ANCHOR_DAY = "pay_cycle_anchor_day"
+    private const val KEY_PRIVACY_MODE = "privacy_mode"
 
     const val FREE_SCAN_LIMIT = 10
 
@@ -67,6 +69,16 @@ object FinancePreferences {
     private val _payCycleAnchorDayFlow = MutableStateFlow(1)
     val payCycleAnchorDayFlow = _payCycleAnchorDayFlow.asStateFlow()
 
+    /**
+     * Privacy mode masks every amount the app renders. It is backed by Compose snapshot state
+     * rather than a StateFlow because [com.example.financemanager.ui.components.moneyString]
+     * reads it as a default argument: a snapshot read inside a composable subscribes that
+     * composable, so every masked amount recomposes the instant the toggle flips — without each
+     * screen having to thread the flag down to its leaves.
+     */
+    private val _privacyMode = mutableStateOf(false)
+    val privacyMode: Boolean get() = _privacyMode.value
+
     fun init(context: Context) {
         appContext = context.applicationContext
         val prefs = prefs()
@@ -81,6 +93,12 @@ object FinancePreferences {
             ?.let { runCatching { PayCycleFrequency.valueOf(it) }.getOrDefault(PayCycleFrequency.MONTHLY) }
             ?: PayCycleFrequency.MONTHLY
         _payCycleAnchorDayFlow.value = prefs.getInt(KEY_PAY_CYCLE_ANCHOR_DAY, 1).coerceAtLeast(1)
+        _privacyMode.value = prefs.getBoolean(KEY_PRIVACY_MODE, false)
+    }
+
+    fun setPrivacyMode(enabled: Boolean) {
+        prefs().edit().putBoolean(KEY_PRIVACY_MODE, enabled).apply()
+        _privacyMode.value = enabled
     }
 
     fun currencyOption(code: String): CurrencyOption {

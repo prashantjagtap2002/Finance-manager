@@ -12,19 +12,17 @@ object RecurringScheduler {
             var currentRec = rec
             
             while (nextExecution <= currentTime) {
-                // 1. Check for duplicate to prevent UNIQUE constraint errors
-                val existingTransaction = dao.findDuplicateTransaction(
-                    amount = currentRec.amount,
-                    type = currentRec.type.name,
-                    categoryId = currentRec.categoryId,
-                    sourceAccountId = currentRec.accountId,
-                    date = nextExecution
-                )
-
-                // Only insert if no duplicate exists (idempotent operation)
-                if (existingTransaction == null) {
-                    // 2. Create a new transaction log
-                    val transaction = Transaction(
+                // 1/2. Log the occurrence and move the balance together. postIfNew makes this
+                // idempotent: a re-run finds the existing row and leaves the balance alone. The
+                // balance step used to sit outside the duplicate check, so every re-run of an
+                // already-logged occurrence charged the account again.
+                //
+                // A recurring TRANSFER debits its source and stops there, because
+                // RecurringTransaction carries no destination account — it needs one before a
+                // recurring transfer can credit the other side.
+                AccountLedger.postIfNew(
+                    dao,
+                    Transaction(
                         amount = currentRec.amount,
                         type = currentRec.type,
                         categoryId = currentRec.categoryId,
@@ -35,19 +33,7 @@ object RecurringScheduler {
                         recurringId = currentRec.id,
                         isAutoLogged = true
                     )
-                    dao.insertTransaction(transaction)
-                }
-
-                // 2. Adjust account balance
-                val account = dao.getAccountById(currentRec.accountId)
-                if (account != null) {
-                    val newBalance = when (currentRec.type) {
-                        TransactionType.EXPENSE -> account.balance - currentRec.amount
-                        TransactionType.INCOME -> account.balance + currentRec.amount
-                        TransactionType.TRANSFER -> account.balance // Transfers should have destination, handled separately
-                    }
-                    dao.updateAccount(account.copy(balance = newBalance))
-                }
+                )
 
                 // 3. Compute next execution date
                 val nextDate = getNextIntervalDate(nextExecution, currentRec.interval)

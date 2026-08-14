@@ -9,6 +9,7 @@ import android.content.Intent
 import android.widget.RemoteViews
 import com.example.financemanager.MainActivity
 import com.example.financemanager.R
+import com.example.financemanager.core.FinancePreferences
 import com.example.financemanager.data.*
 import com.example.financemanager.ui.components.moneyString
 import kotlinx.coroutines.CoroutineScope
@@ -46,6 +47,10 @@ class FinanceWidgetProvider : AppWidgetProvider() {
         appWidgetId: Int
     ) {
         val views = RemoteViews(context.packageName, R.layout.widget_layout)
+
+        // A widget update can start the process on its own, without MainActivity ever running,
+        // so the currency symbol and privacy flag have to be loaded here too.
+        FinancePreferences.init(context)
 
         // Set pending intent to open MainActivity (Quick Entry flow)
         val intent = Intent(context, MainActivity::class.java).apply {
@@ -104,8 +109,9 @@ class FinanceWidgetProvider : AppWidgetProvider() {
                 val foodRemaining = maxOf(0.0, foodLimit - foodSpentThisMonth)
 
                 // Update text views
-                views.setTextViewText(R.id.txt_spent_today, "Spent Today: ${moneyString(spentToday, false)}")
-                views.setTextViewText(R.id.txt_budget_left, "Food Left: ${moneyString(foodRemaining, false)}")
+                // Masked under privacy mode: the home screen is the easiest surface to shoulder-surf.
+                views.setTextViewText(R.id.txt_spent_today, "Spent Today: ${moneyString(spentToday)}")
+                views.setTextViewText(R.id.txt_budget_left, "Food Left: ${moneyString(foodRemaining)}")
 
                 appWidgetManager.updateAppWidget(appWidgetId, views)
             } catch (e: Exception) {

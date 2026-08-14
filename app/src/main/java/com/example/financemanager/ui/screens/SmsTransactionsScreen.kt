@@ -236,8 +236,17 @@ fun SmsTransactionsScreen(
                         SmsTransactionCard(
                             tx = tx,
                             onApprove = {
-                                selectedAccountId = getDefaultAccountId(accounts, tx.accountName)
-                                selectedCategoryId = categories.firstOrNull()?.id ?: 0L
+                                // Reuse how this merchant was filed last time; fall back to the
+                                // account matching the bank and the first envelope otherwise.
+                                val learned = viewModel.learnedRuleFor(tx.counterparty)
+                                val learnedAccount = learned?.accountId?.takeIf { id ->
+                                    accounts.any { it.id == id }
+                                }
+                                val learnedCategory = learned?.categoryId?.takeIf { id ->
+                                    categories.any { it.id == id }
+                                }
+                                selectedAccountId = learnedAccount ?: getDefaultAccountId(accounts, tx.accountName)
+                                selectedCategoryId = learnedCategory ?: categories.firstOrNull()?.id ?: 0L
                                 approveNote = ""
                                 showApproveDialog = tx
                             },
@@ -261,6 +270,7 @@ fun SmsTransactionsScreen(
             debts = debts,
             selectedAccountId = selectedAccountId,
             selectedCategoryId = selectedCategoryId,
+            isAutoFilled = viewModel.learnedRuleFor(tx.counterparty) != null,
             note = approveNote,
             onAccountChange = { selectedAccountId = it },
             onCategoryChange = { selectedCategoryId = it },
@@ -742,6 +752,7 @@ private fun ApproveSmsDialog(
     debts: List<Debt>,
     selectedAccountId: Long,
     selectedCategoryId: Long,
+    isAutoFilled: Boolean,
     note: String,
     onAccountChange: (Long) -> Unit,
     onCategoryChange: (Long) -> Unit,
@@ -790,8 +801,14 @@ private fun ApproveSmsDialog(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                "Review the details before logging",
-                                style = Typography.bodySmall.copy(color = TextSecondary)
+                                if (isAutoFilled) {
+                                    "Envelope filled in from how you filed this merchant before"
+                                } else {
+                                    "Review the details before logging"
+                                },
+                                style = Typography.bodySmall.copy(
+                                    color = if (isAutoFilled) AccentGreen else TextSecondary
+                                )
                             )
                         }
                         IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
@@ -923,7 +940,7 @@ private fun ApproveSmsDialog(
                             ) {
                                 activeDebts.forEach { d ->
                                     DropdownMenuItem(
-                                        text = { Text("${d.personName} (${moneyString(d.amount - d.paidAmount, false)})") },
+                                        text = { Text("${d.personName} (${moneyString(d.amount - d.paidAmount)})") },
                                         onClick = {
                                             selectedDebtId = d.id
                                             debtExpanded = false

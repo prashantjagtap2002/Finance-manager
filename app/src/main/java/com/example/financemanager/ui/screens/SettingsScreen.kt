@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import com.example.financemanager.core.AppLock
 import com.example.financemanager.core.FinancePreferences
 import com.example.financemanager.core.ThemePreference
 import com.example.financemanager.data.Account
@@ -49,6 +50,8 @@ fun SettingsScreen(
 ) {
     val accounts by viewModel.accounts.collectAsState()
     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsState()
+    val hasSecurityPin by viewModel.hasSecurityPin.collectAsState()
+    val appLockTimeoutMs by viewModel.appLockTimeoutMs.collectAsState()
     val isPrivacyMode by viewModel.isPrivacyMode.collectAsState()
     val currencyCode by viewModel.currencyCode.collectAsState()
     val themePreference by viewModel.themePreference.collectAsState()
@@ -58,7 +61,10 @@ fun SettingsScreen(
 
     var showAddAccountDialog by remember { mutableStateOf(false) }
     var editingAccount by remember { mutableStateOf<Account?>(null) }
+    var deletingAccount by remember { mutableStateOf<Account?>(null) }
     var showCurrencyDialog by remember { mutableStateOf(false) }
+    var showPinDialog by remember { mutableStateOf(false) }
+    var showLockTimeoutDialog by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
 
     var showImportConfirmDialog by remember { mutableStateOf(false) }
@@ -148,11 +154,42 @@ fun SettingsScreen(
                                     IconButton(onClick = { editingAccount = account }) {
                                         Icon(Icons.Default.Edit, contentDescription = "Edit Account", tint = SecondaryTeal, modifier = Modifier.size(20.dp))
                                     }
+                                    IconButton(onClick = { deletingAccount = account }) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete Account", tint = AlertRed, modifier = Modifier.size(20.dp))
+                                    }
                                 }
                             }
                             if (account != accounts.last()) {
                                 HorizontalDivider(color = BorderColor, modifier = Modifier.padding(vertical = 4.dp))
                             }
+                        }
+
+                        HorizontalDivider(color = BorderColor, modifier = Modifier.padding(vertical = 4.dp))
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.reconcileBalances { drifts ->
+                                        val message = when {
+                                            drifts.isEmpty() -> "All balances match your transactions"
+                                            drifts.size == 1 ->
+                                                "Corrected ${drifts[0].account.name} by ${moneyString(drifts[0].difference)}"
+                                            else -> "Corrected ${drifts.size} account balances"
+                                        }
+                                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                    }
+                                },
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Recalculate Balances", style = Typography.bodyLarge)
+                                Text(
+                                    "Re-derives each balance from its transactions and fixes any that drifted",
+                                    style = Typography.labelMedium.copy(color = TextSecondary)
+                                )
+                            }
+                            Icon(Icons.Default.Calculate, contentDescription = null, tint = SecondaryTeal)
                         }
                     }
                 }
@@ -219,7 +256,8 @@ fun SettingsScreen(
                             Column(modifier = Modifier.weight(1f)) {
                                 Text("App Lock", style = Typography.bodyLarge)
                                 Text(
-                                    "Require fingerprint / device credential on launch",
+                                    "Require fingerprint, device credential or PIN, and keep balances " +
+                                        "out of screenshots and the recents preview",
                                     style = Typography.labelMedium.copy(color = TextSecondary)
                                 )
                             }
@@ -228,6 +266,66 @@ fun SettingsScreen(
                                 onCheckedChange = { viewModel.setAppLockEnabled(it) },
                                 colors = SwitchDefaults.colors(checkedTrackColor = AccentGreen)
                             )
+                        }
+                        if (isAppLockEnabled) {
+                            HorizontalDivider(color = BorderColor, modifier = Modifier.padding(vertical = 8.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showPinDialog = true },
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Unlock PIN", style = Typography.bodyLarge)
+                                    Text(
+                                        if (hasSecurityPin) {
+                                            "A PIN is set — used when biometrics aren't available"
+                                        } else {
+                                            "Not set. Without a PIN, a device with no screen lock can't be protected."
+                                        },
+                                        style = Typography.labelMedium.copy(color = TextSecondary)
+                                    )
+                                }
+                                Text(
+                                    if (hasSecurityPin) "Change" else "Set",
+                                    style = Typography.labelLarge.copy(color = PrimaryViolet)
+                                )
+                            }
+                            if (hasSecurityPin) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { viewModel.clearSecurityPin() }
+                                        .padding(top = 6.dp)
+                                ) {
+                                    Text(
+                                        "Remove PIN",
+                                        style = Typography.labelLarge.copy(color = AlertRed)
+                                    )
+                                }
+                            }
+                            HorizontalDivider(color = BorderColor, modifier = Modifier.padding(vertical = 8.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { showLockTimeoutDialog = true },
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Auto-Lock", style = Typography.bodyLarge)
+                                    Text(
+                                        "Re-lock after leaving the app",
+                                        style = Typography.labelMedium.copy(color = TextSecondary)
+                                    )
+                                }
+                                Text(
+                                    AppLock.timeoutOptions.firstOrNull { it.first == appLockTimeoutMs }?.second
+                                        ?: "After 30 seconds",
+                                    style = Typography.labelLarge.copy(color = PrimaryViolet)
+                                )
+                            }
                         }
                         HorizontalDivider(color = BorderColor, modifier = Modifier.padding(vertical = 8.dp))
                         Row(
@@ -461,6 +559,69 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(32.dp))
             }
         }
+    }
+
+    deletingAccount?.let { account ->
+        DeleteAccountDialog(
+            account = account,
+            accounts = accounts,
+            viewModel = viewModel,
+            onDismiss = { deletingAccount = null }
+        )
+    }
+
+    if (showPinDialog) {
+        SetPinDialog(
+            onDismiss = { showPinDialog = false },
+            onConfirm = { pin ->
+                viewModel.setSecurityPin(pin)
+                showPinDialog = false
+                Toast.makeText(context, "PIN saved", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    if (showLockTimeoutDialog) {
+        AlertDialog(
+            onDismissRequest = { showLockTimeoutDialog = false },
+            title = { Text("Auto-lock", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "How long the app can stay in the background before it asks you to unlock again.",
+                        style = Typography.labelMedium.copy(color = TextSecondary)
+                    )
+                    AppLock.timeoutOptions.forEach { (millis, label) ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    viewModel.setAppLockTimeout(millis)
+                                    showLockTimeoutDialog = false
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = appLockTimeoutMs == millis,
+                                onClick = {
+                                    viewModel.setAppLockTimeout(millis)
+                                    showLockTimeoutDialog = false
+                                }
+                            )
+                            Text(label, style = Typography.bodyLarge.copy(color = TextPrimary))
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(onClick = { showLockTimeoutDialog = false }) {
+                    Text("Close", color = TextSecondary)
+                }
+            },
+            containerColor = DarkSurface
+        )
     }
 
     if (showCurrencyDialog) {

@@ -43,6 +43,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.financemanager.core.FinancePreferences
 import com.example.financemanager.data.Account
 import com.example.financemanager.data.Category
 import com.example.financemanager.data.Transaction
@@ -732,24 +733,11 @@ fun DashboardScreen(
 
     // Delete Category Envelope Dialog
     deletingCategory?.let { category ->
-        AlertDialog(
-            onDismissRequest = { deletingCategory = null },
-            containerColor = DarkSurface,
-            title = { Text("Delete Envelope", style = Typography.titleLarge.copy(color = AlertRed)) },
-            text = { Text("Are you sure you want to delete '${category.name}' envelope budget? This cannot be undone.", style = Typography.bodyMedium.copy(color = TextPrimary)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    viewModel.deleteCategory(category)
-                    deletingCategory = null
-                }) {
-                    Text("Delete", color = AlertRed, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { deletingCategory = null }) {
-                    Text("Cancel", color = TextMuted)
-                }
-            }
+        DeleteCategoryDialog(
+            category = category,
+            categories = categories,
+            viewModel = viewModel,
+            onDismiss = { deletingCategory = null }
         )
     }
 
@@ -928,7 +916,7 @@ private fun SectionAction(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-fun AccountCard(account: Account, privacy: Boolean = false, modifier: Modifier = Modifier) {
+fun AccountCard(account: Account, privacy: Boolean = FinancePreferences.privacyMode, modifier: Modifier = Modifier) {
     val accent = when (account.type) {
         com.example.financemanager.data.AccountType.BANK -> SecondaryTeal
         com.example.financemanager.data.AccountType.CASH -> AccentGreen
@@ -987,7 +975,7 @@ fun AccountCard(account: Account, privacy: Boolean = false, modifier: Modifier =
 fun EnvelopeProgressItem(
     category: Category, 
     spent: Double, 
-    privacy: Boolean = false, 
+    privacy: Boolean = FinancePreferences.privacyMode, 
     onEdit: (Category) -> Unit = {},
     onUpdateRollover: (Category) -> Unit = {},
     onDelete: (Category) -> Unit = {},
@@ -1096,7 +1084,7 @@ fun TransactionItem(
     transaction: Transaction,
     accountName: String,
     categoryName: String,
-    privacy: Boolean = false,
+    privacy: Boolean = FinancePreferences.privacyMode,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     modifier: Modifier = Modifier

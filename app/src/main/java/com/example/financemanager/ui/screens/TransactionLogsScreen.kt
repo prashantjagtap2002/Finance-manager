@@ -332,7 +332,7 @@ fun LogItem(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
-                    text = "$sign ${moneyString(transaction.amount, false)}",
+                    text = "$sign ${moneyString(transaction.amount)}",
                     style = Typography.titleMedium.copy(color = amountColor, fontWeight = FontWeight.Bold)
                 )
                 IconButton(onClick = onEditClick) {

@@ -74,6 +74,11 @@ object DatabaseSeeder {
             } catch (e: Exception) {
                 e.printStackTrace()
             }
+
+            // The seeded accounts deliberately start at zero rather than at the net of the sample
+            // history. Anchor their opening balances to that so the ledger invariant holds from
+            // the first launch and a reconciliation doesn't "correct" the starting balances.
+            com.example.financemanager.domain.AccountLedger.rebaseOpeningBalances(dao)
         }
     }
 }

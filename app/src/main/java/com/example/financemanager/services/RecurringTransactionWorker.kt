@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.example.financemanager.domain.AccountLedger
 import com.example.financemanager.data.*
 import com.example.financemanager.ui.components.moneyString
 import kotlinx.coroutines.DelicateCoroutinesApi
@@ -35,17 +36,12 @@ class RecurringTransactionWorker(
                 if (rt.nextExecutionDate <= now) {
                     if (rt.isAutoLog) {
                         // Guard against double-applying: FinanceViewModel also runs
-                        // RecurringScheduler on every app open, which can race this worker
-                        // for the same due recurring transaction. Skip if already logged.
-                        val existing = dao.findDuplicateTransaction(
-                            amount = rt.amount,
-                            type = rt.type.name,
-                            categoryId = rt.categoryId,
-                            sourceAccountId = rt.accountId,
-                            date = rt.nextExecutionDate
-                        )
-                        if (existing == null) {
-                            val tx = Transaction(
+                        // RecurringScheduler on every app open, which can race this worker for
+                        // the same due recurring transaction. postIfNew is idempotent — an
+                        // already-logged occurrence is neither re-inserted nor re-charged.
+                        AccountLedger.postIfNew(
+                            dao,
+                            Transaction(
                                 amount = rt.amount,
                                 type = rt.type,
                                 categoryId = rt.categoryId,
@@ -56,18 +52,7 @@ class RecurringTransactionWorker(
                                 recurringId = rt.id,
                                 isAutoLogged = true
                             )
-                            dao.insertTransaction(tx)
-
-                            // Adjust Account Balance
-                            val account = dao.getAccountById(rt.accountId)
-                            if (account != null) {
-                                val newBalance = when (rt.type) {
-                                    TransactionType.EXPENSE, TransactionType.TRANSFER -> account.balance - rt.amount
-                                    TransactionType.INCOME -> account.balance + rt.amount
-                                }
-                                dao.updateAccount(account.copy(balance = newBalance))
-                            }
-                        }
+                        )
                     } else {
                         // Just send a reminder notification
                         com.example.financemanager.services.NotificationHelper.notifyReminder(

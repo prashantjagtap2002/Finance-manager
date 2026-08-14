@@ -619,7 +619,7 @@ private fun ContributeDialog(
                 OutlinedTextField(
                     value = amountStr,
                     onValueChange = { amountStr = it },
-                    label = { Text("Amount — ${moneyString(remaining, false)} to go") },
+                    label = { Text("Amount — ${moneyString(remaining)} to go") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()

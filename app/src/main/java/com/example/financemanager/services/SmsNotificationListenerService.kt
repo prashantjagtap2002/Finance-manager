@@ -3,6 +3,7 @@ package com.example.financemanager.services
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
+import com.example.financemanager.domain.AccountLedger
 import com.example.financemanager.data.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -95,21 +96,21 @@ class SmsNotificationListenerService : NotificationListenerService() {
                     // For digital wallets, typically subtract from Digital Wallet account, otherwise Bank account.
                     val targetAccountId = if (sourceApp.contains("paytm") || sourceApp.contains("wallet")) 4L else 1L
 
-                    val account = dao.getAccountById(targetAccountId)
-                    if (account != null) {
-                        val transaction = Transaction(
-                            amount = amount,
-                            type = TransactionType.EXPENSE,
-                            categoryId = categoryId,
-                            sourceAccountId = targetAccountId,
-                            note = "Auto-logged from notification: $cleanMerchant",
-                            date = System.currentTimeMillis(),
-                            isAutoLogged = true,
-                            merchantName = cleanMerchant,
-                            isVerified = false
+                    if (dao.getAccountById(targetAccountId) != null) {
+                        AccountLedger.post(
+                            dao,
+                            Transaction(
+                                amount = amount,
+                                type = TransactionType.EXPENSE,
+                                categoryId = categoryId,
+                                sourceAccountId = targetAccountId,
+                                note = "Auto-logged from notification: $cleanMerchant",
+                                date = System.currentTimeMillis(),
+                                isAutoLogged = true,
+                                merchantName = cleanMerchant,
+                                isVerified = false
+                            )
                         )
-                        dao.insertTransaction(transaction)
-                        dao.updateAccount(account.copy(balance = account.balance - amount))
                     }
                 }
                 break // Matched, don't check other patterns

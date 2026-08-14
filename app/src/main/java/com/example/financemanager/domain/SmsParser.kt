@@ -286,7 +286,10 @@ object SmsParser {
             }
         }
 
-        if (type.isEmpty()) return null
+        // Nothing bank-specific matched. Fall back to the shape almost every Indian bank and
+        // wallet alert shares, so HDFC/ICICI/Axis/BoB/PNB/Paytm/PhonePe/GPay users get something
+        // instead of nothing.
+        if (type.isEmpty()) return parseGeneric(sender, message, accountName)
 
         return ParsedSms(
             accountName = accountName,
@@ -298,5 +301,168 @@ object SmsParser {
             rawSender = sender,
             rawMessage = message
         )
+    }
+
+    // ================================================================
+    // GENERIC FALLBACK
+    // ================================================================
+
+    private const val AMOUNT = "([0-9][0-9,]*(?:\\.[0-9]{1,2})?)"
+
+    /** `Rs.500`, `Rs 500`, `INR 500`, `₹500`. */
+    private val amountRegex = Regex("(?:INR|RS\\.?|\u20B9)\\s*$AMOUNT", RegexOption.IGNORE_CASE)
+
+    private val debitRegex = Regex(
+        "\\b(debited|debit|spent|paid|withdrawn|deducted|sent|purchase[d]?)\\b",
+        RegexOption.IGNORE_CASE
+    )
+    private val creditRegex = Regex(
+        "\\b(credited|credit|received|deposited|refund(?:ed)?|added)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * Phrases that mean "this is not a transaction that happened". Scheduled debits, bill
+     * reminders, collect requests and failures all otherwise look exactly like the real thing.
+     */
+    private val notATransactionRegex = Regex(
+        "\\b(otp|one[ -]?time password|do not share|" +
+            "(?:will|shall|would) be (?:debited|deducted|credited|charged)|" +
+            "is due|due on|due date|total due|payment due|min(?:imum)? (?:amt|amount) due|" +
+            "has requested|is requesting|collect request|payment request|" +
+            "failed|declined|unsuccessful|insufficient|could not be processed|" +
+            "click here|apply now|pre-approved|you are eligible)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    /** Something in the message has to look like banking, or any SMS with a price would match. */
+    private val bankingContextRegex = Regex(
+        "\\b(a/c|acct|account|card|upi|imps|neft|rtgs|txn|transaction|ref|utr|rrn|wallet|vpa|bal|balance)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val balanceRegex = Regex(
+        "\\b(?:avl|available|updated|closing|a/c|total)?\\s*bal(?:ance)?\\b[^0-9]{0,15}$AMOUNT",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val accountTailRegex = Regex(
+        "\\b(?:a/c|acct|account|card)\\s*(?:no\\.?|number)?\\s*[:#]?\\s*[xX*.]{0,6}(\\d{3,6})\\b",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val referenceRegex = Regex(
+        "\\b(?:ref(?:erence)?(?:\\s*(?:no|number|id))?|utr|rrn|txn\\s*id|transaction\\s*id)\\b" +
+            "[\\s:.#-]*([A-Za-z0-9]{4,25})",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val vpaRegex = Regex("\\b([A-Za-z0-9._-]{2,}@[A-Za-z]{2,})\\b")
+
+    private val debitCounterpartyRegex = Regex(
+        "\\b(?:to|at|towards|in favour of)\\s+([A-Za-z0-9][A-Za-z0-9 &'@._-]{1,39}?)" +
+            "(?=\\s*(?:\\.|,|;|$|\\b(?:on|via|using|with|from|ref|upi|a/c|avl|bal|info|not you|your)\\b))",
+        RegexOption.IGNORE_CASE
+    )
+    private val creditCounterpartyRegex = Regex(
+        "\\b(?:from|by)\\s+([A-Za-z0-9][A-Za-z0-9 &'@._-]{1,39}?)" +
+            "(?=\\s*(?:\\.|,|;|$|\\b(?:on|via|using|with|to|ref|upi|a/c|avl|bal|info|not you|your)\\b))",
+        RegexOption.IGNORE_CASE
+    )
+
+    /**
+     * Sender IDs arrive DLT-formatted (`VM-HDFCBK`, `AD-ICICIB-S`). The middle token identifies
+     * the institution; anything unrecognised is passed through so the user can still map it to an
+     * account by hand.
+     */
+    private val knownSenders = mapOf(
+        "HDFC" to "HDFC Bank", "HDFCBK" to "HDFC Bank",
+        "ICICI" to "ICICI Bank", "ICICIB" to "ICICI Bank", "ICICIT" to "ICICI Bank",
+        "AXIS" to "Axis Bank", "AXISBK" to "Axis Bank",
+        "SBI" to "SBI", "SBIINB" to "SBI", "SBIUPI" to "SBI", "SBIPSG" to "SBI", "ATMSBI" to "SBI", "CBSSBI" to "SBI",
+        "KOTAK" to "Kotak", "KOTAKB" to "Kotak",
+        "PNB" to "Punjab National Bank", "PNBSMS" to "Punjab National Bank",
+        "BOB" to "Bank of Baroda", "BOBTXN" to "Bank of Baroda", "BOBSMS" to "Bank of Baroda", "BOBIBK" to "Bank of Baroda",
+        "CANBNK" to "Canara Bank", "CANARA" to "Canara Bank",
+        "UNIONB" to "Union Bank", "UNIONBK" to "Union Bank", "UBIN" to "Union Bank",
+        "IDFCFB" to "IDFC First Bank", "IDFC" to "IDFC First Bank",
+        "INDUSB" to "IndusInd Bank", "INDUS" to "IndusInd Bank",
+        "YESBNK" to "Yes Bank", "YESBK" to "Yes Bank",
+        "IOBCHN" to "Indian Overseas Bank", "IOB" to "Indian Overseas Bank",
+        "CENTBK" to "Central Bank of India",
+        "UCOBNK" to "UCO Bank",
+        "BOIIND" to "Bank of India", "BOI" to "Bank of India",
+        "FEDBNK" to "Federal Bank",
+        "RBLBNK" to "RBL Bank",
+        "AUBANK" to "AU Small Finance Bank",
+        "BANDHN" to "Bandhan Bank",
+        "INDBNK" to "Indian Bank",
+        "PAYTM" to "Paytm", "PAYTMB" to "Paytm", "PYTMPB" to "Paytm",
+        "PHONPE" to "PhonePe", "PHONEPE" to "PhonePe",
+        "GPAY" to "Google Pay", "GOOGLE" to "Google Pay",
+        "AMZNPAY" to "Amazon Pay", "AMAZON" to "Amazon Pay",
+        "SLICEIT" to "Slice", "JUPITER" to "Jupiter", "FIMONEY" to "Fi"
+    )
+
+    private fun parseGeneric(sender: String, message: String, knownAccountName: String): ParsedSms? {
+        if (notATransactionRegex.containsMatchIn(message)) return null
+        if (!bankingContextRegex.containsMatchIn(message)) return null
+
+        val debitMatch = debitRegex.find(message)
+        val creditMatch = creditRegex.find(message)
+        val directionMatch = listOfNotNull(debitMatch, creditMatch).minByOrNull { it.range.first } ?: return null
+
+        // Amounts quoted right after a balance/limit word describe the account, not the movement.
+        val balanceMatch = balanceRegex.find(message)
+        val balanceDigitsAt = balanceMatch?.groups?.get(1)?.range?.first
+        val amounts = amountRegex.findAll(message)
+            .filter { it.groups[1]?.range?.first != balanceDigitsAt }
+            .toList()
+        if (amounts.isEmpty()) return null
+
+        // The transacted amount is the one sitting closest to the debited/credited word.
+        val amountMatch = amounts.minByOrNull {
+            kotlin.math.abs(it.range.first - directionMatch.range.first)
+        } ?: return null
+
+        val isDebit = debitMatch != null &&
+            (creditMatch == null || debitMatch.range.first <= creditMatch.range.first)
+
+        val counterpartyRegex = if (isDebit) debitCounterpartyRegex else creditCounterpartyRegex
+        val counterparty = vpaRegex.find(message)?.groupValues?.get(1)
+            ?: counterpartyRegex.find(message)?.groupValues?.get(1)?.trim()?.trimEnd('.', ',')
+            ?: ""
+
+        val accountName = knownAccountName.ifEmpty {
+            val tail = accountTailRegex.find(message)?.groupValues?.get(1)
+            val bank = bankFromSender(sender)
+            when {
+                bank.isNotEmpty() && tail != null -> "$bank $tail"
+                bank.isNotEmpty() -> bank
+                tail != null -> "A/c $tail"
+                else -> sender
+            }
+        }
+
+        return ParsedSms(
+            accountName = accountName,
+            type = if (isDebit) "debit" else "credit",
+            amount = "Rs." + amountMatch.groupValues[1].replace(",", ""),
+            balance = balanceMatch?.groupValues?.get(1)?.replace(",", "")?.let { "Rs.$it" } ?: "",
+            counterparty = counterparty,
+            reference = referenceRegex.find(message)?.groupValues?.get(1) ?: "",
+            rawSender = sender,
+            rawMessage = message
+        )
+    }
+
+    private fun bankFromSender(sender: String): String {
+        val tokens = sender.uppercase().split("-", ".", "_").filter { it.isNotBlank() }
+        // Skip the two-letter operator prefix ("VM", "AD", "JD") and any single-letter suffix.
+        tokens.filter { it.length > 2 }.forEach { token ->
+            knownSenders[token]?.let { return it }
+            knownSenders.entries.firstOrNull { token.contains(it.key) }?.let { return it.value }
+        }
+        return ""
     }
 }

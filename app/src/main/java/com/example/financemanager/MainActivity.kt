@@ -5,30 +5,25 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import android.widget.Toast
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricPrompt
 import androidx.biometric.BiometricManager
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.example.financemanager.core.AppLock
 import com.example.financemanager.core.FinancePreferences
 import com.example.financemanager.services.NotificationHelper
 import com.example.financemanager.theme.FinanceManagerTheme
+import com.example.financemanager.ui.screens.AppLockScreen
 import com.example.financemanager.ui.screens.OnboardingScreen
 import java.util.concurrent.Executor
 import androidx.work.Constraints
@@ -46,7 +41,9 @@ class MainActivity : FragmentActivity() {
     private lateinit var biometricPrompt: BiometricPrompt
     private lateinit var promptInfo: BiometricPrompt.PromptInfo
 
-    private val isUnlockedState = mutableStateOf(false)
+    /** Set while the biometric sheet is up, so onStart doesn't stack a second prompt on it. */
+    private var biometricPromptShowing = false
+
     private val smsPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
     private val notificationPermissionLauncher =
@@ -57,8 +54,8 @@ class MainActivity : FragmentActivity() {
         enableEdgeToEdge()
 
         FinancePreferences.init(this)
+        AppLock.init(this)
         val prefs = getSharedPreferences("finance_prefs", Context.MODE_PRIVATE)
-        val appLockEnabled = prefs.getBoolean("app_lock_enabled", true)
 
         NotificationHelper.ensureChannels(this)
         requestSmsPermissionIfNeeded()
@@ -88,12 +85,20 @@ class MainActivity : FragmentActivity() {
             object : BiometricPrompt.AuthenticationCallback() {
                 override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
                     super.onAuthenticationError(errorCode, errString)
-                    Toast.makeText(applicationContext, "Authentication error: $errString", Toast.LENGTH_SHORT).show()
+                    biometricPromptShowing = false
+                    // A cancel is not a failure worth shouting about — the PIN pad is right there.
+                    if (errorCode != BiometricPrompt.ERROR_USER_CANCELED &&
+                        errorCode != BiometricPrompt.ERROR_NEGATIVE_BUTTON &&
+                        errorCode != BiometricPrompt.ERROR_CANCELED
+                    ) {
+                        Toast.makeText(applicationContext, "Authentication error: $errString", Toast.LENGTH_SHORT).show()
+                    }
                 }
 
                 override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                     super.onAuthenticationSucceeded(result)
-                    isUnlockedState.value = true
+                    biometricPromptShowing = false
+                    AppLock.unlock()
                 }
 
                 override fun onAuthenticationFailed() {
@@ -108,12 +113,8 @@ class MainActivity : FragmentActivity() {
             .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
             .build()
 
-        // Only prompt when the user hasn't disabled app lock in Settings
-        if (appLockEnabled) {
-            triggerBiometricUnlock()
-        } else {
-            isUnlockedState.value = true
-        }
+        // Unlocking is driven from onStart so that returning from the background re-authenticates
+        // too, not just a cold launch.
 
         val openQuickEntry = intent.getBooleanExtra("open_quick_entry", false)
 
@@ -122,11 +123,15 @@ class MainActivity : FragmentActivity() {
             val financeViewModel: com.example.financemanager.ui.viewmodel.FinanceViewModel = viewModel()
 
             FinanceManagerTheme(themeMode = themeMode) {
+                // Keep balances out of the recents thumbnail and out of screenshots while the
+                // lock is armed. Reading the snapshot state here re-runs this when it's toggled.
+                val lockArmed = AppLock.isEnabled
+                LaunchedEffect(lockArmed) { applySecureFlag(lockArmed) }
+
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    val isUnlocked by remember { isUnlockedState }
                     var showOnboarding by remember {
                         mutableStateOf(!prefs.getBoolean("onboarding_done", false))
                     }
@@ -139,14 +144,57 @@ class MainActivity : FragmentActivity() {
                                 showOnboarding = false
                             }
                         )
-                        isUnlocked -> MainNavigation(
+                        AppLock.isLocked -> AppLockScreen(
+                            canUseBiometrics = canAuthenticateWithBiometrics(),
+                            onBiometricRequest = { triggerBiometricUnlock() }
+                        )
+                        else -> MainNavigation(
                             viewModel = financeViewModel,
                             openQuickEntry = openQuickEntry
                         )
-                        else -> BiometricLockScreen(onUnlockClick = { triggerBiometricUnlock() })
                     }
                 }
             }
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        // This app is single-Activity, so its own start/stop is the app's foreground/background.
+        AppLock.onEnterForeground()
+        if (AppLock.isLocked) promptForUnlock()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        AppLock.onEnterBackground()
+    }
+
+    /**
+     * Decides how the user gets back in. Biometrics are offered first when the device has them;
+     * otherwise the PIN pad on [AppLockScreen] takes over. With neither available there is nothing
+     * to authenticate against, so stay out of the user's way rather than locking them out for good.
+     */
+    private fun promptForUnlock() {
+        when {
+            canAuthenticateWithBiometrics() -> triggerBiometricUnlock()
+            AppLock.hasPin -> Unit // The lock screen collects the PIN.
+            else -> AppLock.unlock()
+        }
+    }
+
+    private fun canAuthenticateWithBiometrics(): Boolean {
+        val canAuthenticate = BiometricManager.from(this).canAuthenticate(
+            BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+        )
+        return canAuthenticate == BiometricManager.BIOMETRIC_SUCCESS
+    }
+
+    private fun applySecureFlag(secure: Boolean) {
+        if (secure) {
+            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
     }
 
@@ -168,71 +216,23 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun triggerBiometricUnlock() {
-        val biometricManager = BiometricManager.from(this)
-        val canAuthenticate = biometricManager.canAuthenticate(
-            BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL
-        )
-        if (canAuthenticate == BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE ||
-            canAuthenticate == BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE ||
-            canAuthenticate == BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED
-        ) {
-            // No biometric/device credential is configured on this device at all, so there is
-            // nothing an app-level lock can meaningfully protect against here. Unlock rather
-            // than permanently locking the user out with no way to authenticate.
-            isUnlockedState.value = true
+        if (!canAuthenticateWithBiometrics()) {
+            // No biometric or device credential is enrolled. A PIN is the only thing left that can
+            // protect the data; without one there is nothing to authenticate against, so unlock
+            // rather than stranding the user with no way in.
+            if (!AppLock.hasPin) AppLock.unlock()
             return
         }
+        if (biometricPromptShowing) return
         try {
+            biometricPromptShowing = true
             biometricPrompt.authenticate(promptInfo)
         } catch (e: Exception) {
             // Do NOT unlock here: authenticate() throwing is not proof the device has no lock
             // configured (that case is already handled above). Fail closed and let the user
-            // retry via the "Unlock App" button.
+            // retry via the lock screen.
+            biometricPromptShowing = false
             Toast.makeText(applicationContext, "Unable to start authentication: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-}
-
-@Composable
-fun BiometricLockScreen(onUnlockClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Box(
-            modifier = Modifier
-                .size(80.dp)
-                .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Default.Lock,
-                contentDescription = "Secured App",
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(40.dp)
-            )
-        }
-        Spacer(modifier = Modifier.height(24.dp))
-        Text(
-            text = "Finance Manager Secured",
-            style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Bold
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "Please authenticate to access your transactions",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.height(48.dp))
-        Button(
-            onClick = onUnlockClick,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text("Unlock App")
         }
     }
 }

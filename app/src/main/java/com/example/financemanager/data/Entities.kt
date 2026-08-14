@@ -26,7 +26,14 @@ data class Account(
     val name: String,
     val type: AccountType,
     val balance: Double,
-    val currency: String = "INR"
+    val currency: String = "INR",
+    /**
+     * What the account held before any recorded transaction. Together with the transactions it
+     * defines the ledger invariant `balance == openingBalance + net effect of transactions`, which
+     * [com.example.financemanager.domain.AccountLedger] maintains and can re-derive to repair
+     * drift left by older versions.
+     */
+    val openingBalance: Double = 0.0
 )
 
 @Entity(tableName = "categories")
@@ -123,4 +130,20 @@ data class SmsTransaction(
     val isIgnored: Boolean = false,
     val approvedCategoryId: Long = 0,
     val approvedAccountId: Long = 0
+)
+
+/**
+ * Remembers which category the user filed a merchant under, so the next alert from that merchant
+ * comes pre-categorised instead of asking again.
+ *
+ * The key is [com.example.financemanager.domain.MerchantKey.normalize]d, and [accountId] carries
+ * the account the user picked alongside it (0 when they haven't settled on one).
+ */
+@Entity(tableName = "merchant_rules")
+data class MerchantRule(
+    @PrimaryKey val merchantKey: String,
+    val categoryId: Long,
+    val accountId: Long = 0,
+    val hitCount: Int = 1,
+    val updatedAt: Long = System.currentTimeMillis()
 )

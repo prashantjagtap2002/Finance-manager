@@ -134,7 +134,7 @@ fun NetWorthScreen(
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            moneyString(currentNetWorth, false, decimals = 2),
+                            moneyString(currentNetWorth, decimals = 2),
                             style = Typography.displayMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
@@ -155,7 +155,7 @@ fun NetWorthScreen(
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
-                                text = "${if (isPositive) "+" else ""}${moneyString(diff, false)} (${String.format("%.1f", percentageDiff)}%) ${selectedFilter.label}",
+                                text = "${if (isPositive) "+" else ""}${moneyString(diff)} (${String.format("%.1f", percentageDiff)}%) ${selectedFilter.label}",
                                 style = Typography.labelSmall.copy(
                                     color = if (isPositive) AccentGreen else AlertRed,
                                     fontWeight = FontWeight.Bold
@@ -179,7 +179,7 @@ fun NetWorthScreen(
                             ) {
                                 Text("Monthly Spend", style = Typography.labelSmall.copy(color = TextMuted), textAlign = TextAlign.Center)
                                 Spacer(modifier = Modifier.height(2.dp))
-                                Text(moneyString(monthlySpent, false), style = Typography.titleSmall.copy(color = AlertRed, fontWeight = FontWeight.Bold), textAlign = TextAlign.Center)
+                                Text(moneyString(monthlySpent), style = Typography.titleSmall.copy(color = AlertRed, fontWeight = FontWeight.Bold), textAlign = TextAlign.Center)
                             }
                             VerticalDivider(modifier = Modifier.height(28.dp), color = BorderColor.copy(alpha = 0.25f))
                             Column(
@@ -188,7 +188,7 @@ fun NetWorthScreen(
                             ) {
                                 Text("Total Assets", style = Typography.labelSmall.copy(color = TextMuted), textAlign = TextAlign.Center)
                                 Spacer(modifier = Modifier.height(2.dp))
-                                Text(moneyString(totalAssets, false), style = Typography.titleSmall.copy(color = AccentGreen, fontWeight = FontWeight.Bold), textAlign = TextAlign.Center)
+                                Text(moneyString(totalAssets), style = Typography.titleSmall.copy(color = AccentGreen, fontWeight = FontWeight.Bold), textAlign = TextAlign.Center)
                             }
                             VerticalDivider(modifier = Modifier.height(28.dp), color = BorderColor.copy(alpha = 0.25f))
                             Column(
@@ -197,7 +197,7 @@ fun NetWorthScreen(
                             ) {
                                 Text("Liabilities", style = Typography.labelSmall.copy(color = TextMuted), textAlign = TextAlign.Center)
                                 Spacer(modifier = Modifier.height(2.dp))
-                                Text(moneyString(totalLiabilities, false), style = Typography.titleSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold), textAlign = TextAlign.Center)
+                                Text(moneyString(totalLiabilities), style = Typography.titleSmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold), textAlign = TextAlign.Center)
                             }
                         }
                     }
@@ -394,7 +394,7 @@ fun NetWorthScreen(
                                         }
                                     }
                                     Text(
-                                        moneyString(acc.balance, false),
+                                        moneyString(acc.balance),
                                         style = Typography.bodyMedium.copy(
                                             color = if (acc.balance >= 0) TextPrimary else AlertRed,
                                             fontWeight = FontWeight.Bold
@@ -436,7 +436,7 @@ fun NetWorthScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Text(
-                                    "Next Target: ${moneyString(milestoneTarget, false, decimals = 0)}",
+                                    "Next Target: ${moneyString(milestoneTarget, decimals = 0)}",
                                     style = Typography.labelMedium.copy(color = TextSecondary, fontWeight = FontWeight.SemiBold)
                                 )
                                 Text(
@@ -634,7 +634,7 @@ fun NetWorthLineChart(
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = moneyString(entry.value, false),
+                                text = moneyString(entry.value),
                                 style = Typography.titleMedium.copy(
                                     color = if (entry.value >= 0) AccentGreen else AlertRed,
                                     fontWeight = FontWeight.Bold

@@ -240,7 +240,7 @@ fun TransactionCategoryItem(transaction: Transaction, categoryColor: Color) {
             }
             
             Text(
-                text = moneyString(transaction.amount, false),
+                text = moneyString(transaction.amount),
                 style = Typography.titleMedium.copy(color = MaterialTheme.colorScheme.onSurface)
             )
         }

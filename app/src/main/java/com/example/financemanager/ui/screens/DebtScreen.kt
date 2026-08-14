@@ -137,7 +137,7 @@ fun DebtScreen(
                             Text("Owed to You", style = Typography.labelSmall.copy(color = TextSecondary))
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text(moneyString(totalToReceive, false), style = Typography.titleMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold))
+                        Text(moneyString(totalToReceive), style = Typography.titleMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold))
                     }
                 }
 
@@ -159,7 +159,7 @@ fun DebtScreen(
                             Text("You Owe", style = Typography.labelSmall.copy(color = TextSecondary))
                         }
                         Spacer(modifier = Modifier.height(6.dp))
-                        Text(moneyString(totalToPay, false), style = Typography.titleMedium.copy(color = AlertRed, fontWeight = FontWeight.Bold))
+                        Text(moneyString(totalToPay), style = Typography.titleMedium.copy(color = AlertRed, fontWeight = FontWeight.Bold))
                     }
                 }
             }
@@ -277,7 +277,7 @@ fun DebtScreen(
                                                     }
                                                 }
                                             }
-                                            Text("Net: ${moneyString(netBalance, false)}", style = Typography.labelMedium.copy(color = if (selectedTab == 0) AccentGreen else AlertRed))
+                                            Text("Net: ${moneyString(netBalance)}", style = Typography.labelMedium.copy(color = if (selectedTab == 0) AccentGreen else AlertRed))
                                         }
                                         
                                         if (!isSingle) {
@@ -373,7 +373,7 @@ fun DebtScreen(
                     style = Typography.titleLarge.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
                 )
                 Text(
-                    "Remaining Balance: ${moneyString(paymentDebt!!.amount - paymentDebt!!.paidAmount, false)}",
+                    "Remaining Balance: ${moneyString(paymentDebt!!.amount - paymentDebt!!.paidAmount)}",
                     style = Typography.bodyMedium.copy(color = TextSecondary)
                 )
                 
@@ -608,7 +608,7 @@ fun DebtItemRow(
         
         Column(horizontalAlignment = Alignment.End) {
             Text(
-                moneyString(debt.amount, false),
+                moneyString(debt.amount),
                 style = Typography.titleMedium.copy(
                     color = if (debt.isSettled) TextMuted else TextPrimary,
                     fontWeight = FontWeight.Bold,
@@ -626,7 +626,7 @@ fun DebtItemRow(
                     trackColor = BorderColor
                 )
                 Text(
-                    "${moneyString(debt.paidAmount, false)} paid",
+                    "${moneyString(debt.paidAmount)} paid",
                     style = Typography.labelSmall.copy(color = TextMuted, fontSize = 9.sp)
                 )
             }
@@ -749,11 +749,11 @@ fun PayoffPlannerSheet(
                                 Text(debt.personName, style = Typography.titleMedium.copy(color = TextPrimary))
                                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                                     Text("Int: ${interest}%", style = Typography.labelSmall.copy(color = AlertRed))
-                                    Text("Min: ${moneyString(minPayment, false)}", style = Typography.labelSmall.copy(color = TextSecondary))
+                                    Text("Min: ${moneyString(minPayment)}", style = Typography.labelSmall.copy(color = TextSecondary))
                                 }
                             }
                             Column(horizontalAlignment = Alignment.End) {
-                                Text(moneyString(remaining, false), style = Typography.titleMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold))
+                                Text(moneyString(remaining), style = Typography.titleMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold))
                                 Text("~ $months months", style = Typography.labelSmall.copy(color = SecondaryTeal))
                             }
                         }

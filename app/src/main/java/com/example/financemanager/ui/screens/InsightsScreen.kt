@@ -321,9 +321,9 @@ fun InsightsScreen(
         if (curIncomeLocal > 0) {
             val net = curIncomeLocal - curTotal
             if (net > 0) {
-                lines.add("On track to save ${moneyString(net, false)} this period." to true)
+                lines.add("On track to save ${moneyString(net)} this period." to true)
             } else {
-                lines.add("You're ${moneyString(-net, false)} over your income this period." to false)
+                lines.add("You're ${moneyString(-net)} over your income this period." to false)
             }
         }
         lines
@@ -669,7 +669,7 @@ fun InsightsScreen(
                                                         maxLines = 1
                                                     )
                                                     Text(
-                                                        "${moneyString(item.amount, false)} (${percent.toInt()}%)",
+                                                        "${moneyString(item.amount)} (${percent.toInt()}%)",
                                                         style = TextStyle(color = TextSecondary, fontSize = 10.sp)
                                                     )
                                                 }
@@ -864,12 +864,12 @@ fun InsightsScreen(
                             Spacer(modifier = Modifier.height(14.dp))
                             if (periodIsInFuture) {
                                 Text(
-                                    "Based on your current balance of ${moneyString(currentBalance, false)} and your spending pace this period, you're projected to have:",
+                                    "Based on your current balance of ${moneyString(currentBalance)} and your spending pace this period, you're projected to have:",
                                     style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextSecondary)
                                 )
                                 Spacer(modifier = Modifier.height(14.dp))
                                 Text(
-                                    moneyString(forecastEndBalance, false),
+                                    moneyString(forecastEndBalance),
                                     style = com.example.financemanager.theme.Typography.headlineMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold)
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
@@ -884,7 +884,7 @@ fun InsightsScreen(
                                 )
                                 Spacer(modifier = Modifier.height(14.dp))
                                 Text(
-                                    moneyString(currentBalance, false),
+                                    moneyString(currentBalance),
                                     style = com.example.financemanager.theme.Typography.headlineMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold)
                                 )
                             }
@@ -971,7 +971,7 @@ fun DonutChart(
         }
         
         Text(
-            text = moneyString(totalExpense, false),
+            text = moneyString(totalExpense),
             style = com.example.financemanager.theme.Typography.titleSmall.copy(
                 fontWeight = FontWeight.Bold,
                 color = TextPrimary
@@ -1114,7 +1114,7 @@ fun DailyExpenseBarChart(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "${selectedBucket.fullDateStr} • ${moneyString(selectedBucket.amount, false)}",
+                    text = "${selectedBucket.fullDateStr} • ${moneyString(selectedBucket.amount)}",
                     style = Typography.titleSmall.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold)
                 )
                 Text(
@@ -1369,7 +1369,7 @@ fun DailyAmountLineChart(
     val selectedDelta = deltas.getOrNull(selectedIndex) ?: 0.0
 
     fun signedMoney(value: Double): String =
-        (if (value >= 0) "+" else "−") + moneyString(kotlin.math.abs(value), false)
+        (if (value >= 0) "+" else "−") + moneyString(kotlin.math.abs(value))
 
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -1392,9 +1392,9 @@ fun DailyAmountLineChart(
             if (hasData) {
                 Text(
                     text = when {
-                        selected != null -> moneyString(selected.amount, false)
+                        selected != null -> moneyString(selected.amount)
                         isBalanceMode -> signedMoney(netChange)
-                        else -> moneyString(totalSpend, false)
+                        else -> moneyString(totalSpend)
                     },
                     style = Typography.labelMedium.copy(
                         color = if (selected != null) markerColor else trendColor,
@@ -1436,8 +1436,8 @@ fun DailyAmountLineChart(
         Text(
             text = when {
                 selected != null && isBalanceMode ->
-                    "${selected.fullDateStr} • ${moneyString(selected.amount, false)} (${signedMoney(selectedDelta)} that day)"
-                selected != null -> "${selected.fullDateStr} • ${moneyString(selected.amount, false)}"
+                    "${selected.fullDateStr} • ${moneyString(selected.amount)} (${signedMoney(selectedDelta)} that day)"
+                selected != null -> "${selected.fullDateStr} • ${moneyString(selected.amount)}"
                 isBalanceMode -> "Tap any point to see your total on that day"
                 else -> "Tap any point to see that day's amount"
             },
@@ -1644,7 +1644,7 @@ fun DailyAmountLineChart(
                         val gapPx = with(density) { 13.dp.toPx() }
                         val above = tag == "High"
                         Text(
-                            text = "$tag ${moneyString(bucket.amount, false)}",
+                            text = "$tag ${moneyString(bucket.amount)}",
                             style = Typography.labelSmall.copy(
                                 color = tagColor,
                                 fontSize = 9.sp,
@@ -1692,7 +1692,7 @@ fun DailyAmountLineChart(
                         maxLines = 1
                     )
                     Text(
-                        moneyString(selected.amount, false),
+                        moneyString(selected.amount),
                         style = Typography.labelMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold),
                         maxLines = 1
                     )
@@ -1745,7 +1745,7 @@ fun DailyAmountLineChart(
                 MovementRow(
                     icon = Icons.Default.ArrowUpward,
                     tint = upColor,
-                    text = "Highest total ${moneyString(dayBuckets[peakIdx].amount, false)} on ${dayBuckets[peakIdx].fullDateStr}"
+                    text = "Highest total ${moneyString(dayBuckets[peakIdx].amount)} on ${dayBuckets[peakIdx].fullDateStr}"
                 )
             }
             val lowIdx = lowIndex
@@ -1753,7 +1753,7 @@ fun DailyAmountLineChart(
                 MovementRow(
                     icon = Icons.Default.ArrowDownward,
                     tint = downColor,
-                    text = "Lowest total ${moneyString(dayBuckets[lowIdx].amount, false)} on ${dayBuckets[lowIdx].fullDateStr}"
+                    text = "Lowest total ${moneyString(dayBuckets[lowIdx].amount)} on ${dayBuckets[lowIdx].fullDateStr}"
                 )
             }
             val riseIdx = biggestRiseIndex
@@ -1776,8 +1776,8 @@ fun DailyAmountLineChart(
                 icon = if (netChange >= 0) Icons.AutoMirrored.Filled.TrendingUp else Icons.AutoMirrored.Filled.TrendingDown,
                 tint = if (netChange >= 0) upColor else downColor,
                 text = "Over this period your total went ${if (netChange >= 0) "up" else "down"} " +
-                    "${moneyString(kotlin.math.abs(netChange), false)} — from ${moneyString(openingValue, false)} " +
-                    "to ${moneyString(dayBuckets.last().amount, false)}"
+                    "${moneyString(kotlin.math.abs(netChange))} — from ${moneyString(openingValue)} " +
+                    "to ${moneyString(dayBuckets.last().amount)}"
             )
         }
     }
@@ -1836,7 +1836,7 @@ fun IncomeVsExpenseComparisonChart(
             val net = income - expense
             val chipColor = if (net >= 0) AccentGreen else AlertRed
             Text(
-                text = if (net >= 0) "+${moneyString(net, false)}" else moneyString(net, false),
+                text = if (net >= 0) "+${moneyString(net)}" else moneyString(net),
                 style = Typography.labelMedium.copy(color = chipColor, fontWeight = FontWeight.Bold)
             )
         }
@@ -1871,7 +1871,7 @@ fun IncomeVsExpenseComparisonChart(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text("Income", style = Typography.labelSmall.copy(color = TextSecondary))
-                Text(moneyString(income, false), style = Typography.labelSmall.copy(color = AccentGreen, fontWeight = FontWeight.Bold))
+                Text(moneyString(income), style = Typography.labelSmall.copy(color = AccentGreen, fontWeight = FontWeight.Bold))
             }
 
             // Expense Bar
@@ -1895,7 +1895,7 @@ fun IncomeVsExpenseComparisonChart(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text("Expenses", style = Typography.labelSmall.copy(color = TextSecondary))
-                Text(moneyString(expense, false), style = Typography.labelSmall.copy(color = AlertRed, fontWeight = FontWeight.Bold))
+                Text(moneyString(expense), style = Typography.labelSmall.copy(color = AlertRed, fontWeight = FontWeight.Bold))
             }
         }
     }
@@ -1955,7 +1955,7 @@ fun CumulativeCashFlowTrendChart(
             }
             if (hasData) {
                 Text(
-                    text = moneyString(dayBuckets.last(), false),
+                    text = moneyString(dayBuckets.last()),
                     style = Typography.labelMedium.copy(color = PrimaryViolet, fontWeight = FontWeight.Bold)
                 )
             }

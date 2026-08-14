@@ -10,6 +10,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.example.financemanager.domain.AccountLedger
 import com.example.financemanager.data.FinanceDatabase
 import com.example.financemanager.data.remote.*
 import io.github.jan.supabase.postgrest.postgrest
@@ -210,6 +211,9 @@ class SyncWorker(
                         remote.forEach { if (!localIds.contains(it.id)) dao.insertCategory(it.toEntity()) }
                     },
                     syncTable("transactions_pull") {
+                        // Written straight to the DAO rather than through AccountLedger: the
+                        // accounts pulled above already carry the balances these transactions
+                        // produced on the other device, so replaying them would double-count.
                         val remote = client.postgrest["transactions"].select { filter { eq("user_id", userId) } }.decodeList<TransactionDto>()
                         val localIds = dao.getTransactionsList().map { it.id }.toSet()
                         remote.forEach { if (!localIds.contains(it.id)) dao.insertTransaction(it.toEntity()) }
@@ -233,6 +237,13 @@ class SyncWorker(
                         val remote = client.postgrest["sms_transactions"].select { filter { eq("user_id", userId) } }.decodeList<SmsTransactionDto>()
                         val localIds = dao.getSmsTransactionsList().map { it.id }.toSet()
                         remote.forEach { if (!localIds.contains(it.id)) dao.insertSmsTransaction(it.toEntity()) }
+                    },
+                    syncTable("opening_balances_rebase") {
+                        // The cloud schema has no opening-balance column, so pulled accounts land
+                        // with the field at its default. Their balances are authoritative, so
+                        // re-anchor the opening balances to them — otherwise a later
+                        // "Recalculate balances" would treat the missing anchor as drift.
+                        AccountLedger.rebaseOpeningBalances(dao)
                     }
                 )
             }
