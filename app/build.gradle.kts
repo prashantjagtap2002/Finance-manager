@@ -21,8 +21,8 @@ android {
         applicationId = "com.stack.finance"
         minSdk = 24
         targetSdk = 36
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 3
+        versionName = "2.1.0"
 
         buildConfigField("String", "SUPABASE_URL", "\"$supabaseUrl\"")
         buildConfigField("String", "SUPABASE_KEY", "\"$supabaseKey\"")
@@ -115,6 +115,8 @@ dependencies {
 
     // Extended Icons
     implementation(libs.androidx.compose.material.icons.extended)
+    // QR rendering for UPI settlement links
+    implementation("com.google.zxing:core:3.5.3")
 
     // Supabase (cloud sync + anonymous auth)
     implementation(platform(libs.supabase.bom))

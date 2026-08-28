@@ -58,6 +58,8 @@ fun MainNavigation(
     val currentKey = backStack.lastOrNull()
     val isTopLevel = bottomTabs.any { it.key == currentKey }
     val selectedTabIndex = bottomTabs.indexOfFirst { it.key == currentKey }.coerceAtLeast(0)
+    val emphasized = remember { CubicBezierEasing(0.2f, 0f, 0f, 1f) }
+    val tabItems = remember { bottomTabs.map { iOSTabItem(it.icon, it.label) } }
 
     Scaffold(
         containerColor = if (LocalThemeIsDark.current) iOSBackgroundDark else iOSBackgroundLight,
@@ -78,13 +80,12 @@ fun MainNavigation(
                             backStack.add(tab.key)
                         }
                     },
-                    tabs = bottomTabs.map { iOSTabItem(it.icon, it.label) }
+                        tabs = tabItems
                 )
             }
         }
     ) { paddingValues ->
-        // Material-style emphasized easing; short durations keep 120Hz displays feeling instant
-        val emphasized = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+        // Short transitions leave more frame budget for the destination screen.
         NavDisplay(
             backStack = backStack,
             onBack = { backStack.removeLastOrNull() },
@@ -92,22 +93,22 @@ fun MainNavigation(
                 .fillMaxSize()
                 .padding(bottom = paddingValues.calculateBottomPadding()),
             transitionSpec = {
-                (slideInHorizontally(tween(300, easing = emphasized)) { it / 4 } +
-                    fadeIn(tween(220, easing = emphasized))) togetherWith
-                    (slideOutHorizontally(tween(300, easing = emphasized)) { -it / 8 } +
-                        fadeOut(tween(120)))
+                (slideInHorizontally(tween(220, easing = emphasized)) { it / 4 } +
+                    fadeIn(tween(160, easing = emphasized))) togetherWith
+                    (slideOutHorizontally(tween(220, easing = emphasized)) { -it / 8 } +
+                        fadeOut(tween(100)))
             },
             popTransitionSpec = {
-                (slideInHorizontally(tween(300, easing = emphasized)) { -it / 8 } +
-                    fadeIn(tween(220, easing = emphasized))) togetherWith
-                    (slideOutHorizontally(tween(300, easing = emphasized)) { it / 4 } +
-                        fadeOut(tween(120)))
+                (slideInHorizontally(tween(220, easing = emphasized)) { -it / 8 } +
+                    fadeIn(tween(160, easing = emphasized))) togetherWith
+                    (slideOutHorizontally(tween(220, easing = emphasized)) { it / 4 } +
+                        fadeOut(tween(100)))
             },
             predictivePopTransitionSpec = {
-                (slideInHorizontally(tween(300, easing = emphasized)) { -it / 8 } +
-                    fadeIn(tween(220, easing = emphasized))) togetherWith
-                    (slideOutHorizontally(tween(300, easing = emphasized)) { it / 4 } +
-                        fadeOut(tween(120)))
+                (slideInHorizontally(tween(220, easing = emphasized)) { -it / 8 } +
+                    fadeIn(tween(160, easing = emphasized))) togetherWith
+                    (slideOutHorizontally(tween(220, easing = emphasized)) { it / 4 } +
+                        fadeOut(tween(100)))
             },
             entryProvider = entryProvider {
                 entry<Dashboard> {
@@ -116,6 +117,7 @@ fun MainNavigation(
                         onNavigateToQuickEntry = { backStack.add(QuickEntry) },
                         onNavigateToBudget = { backStack.add(Budget) },
                         onNavigateToInsights = { backStack.add(Insights) },
+                        onNavigateToFinancialTools = { backStack.add(FinancialTools) },
                         onNavigateToSettings = { backStack.add(Settings) },
                         onNavigateToLogs = { backStack.add(TransactionLogs) },
                         onNavigateToSubscriptions = { backStack.add(Subscriptions) },
@@ -157,9 +159,22 @@ fun MainNavigation(
                         viewModel = viewModel,
                         showBackButton = backStack.size > 1,
                         onNavigateBack = { if (backStack.size > 1) backStack.removeLastOrNull() },
+                        onNavigateToCustomInsight = { backStack.add(CustomInsight) },
                         onNavigateToCategory = { categoryId, year, month ->
                             backStack.add(CategoryDetails(categoryId, year, month))
                         }
+                    )
+                }
+                entry<FinancialTools> {
+                    FinancialToolsScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { backStack.removeLastOrNull() }
+                    )
+                }
+                entry<CustomInsight> {
+                    CustomInsightScreen(
+                        viewModel = viewModel,
+                        onNavigateBack = { backStack.removeLastOrNull() }
                     )
                 }
                 entry<Settings> {

@@ -50,6 +50,7 @@ fun TransactionLogsScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var pendingDelete by remember { mutableStateOf<Transaction?>(null) }
 
     fun deleteWithUndo(transaction: Transaction) {
         viewModel.deleteTransaction(transaction)
@@ -219,19 +220,51 @@ fun TransactionLogsScreen(
                     val category = categories.firstOrNull { it.id == transaction.categoryId }
                     val categoryName = category?.name ?: "Income/Transfer"
 
-                    LogItem(
-                        transaction = transaction,
-                        accountName = accountName,
-                        categoryName = categoryName,
-                        tags = viewModel.extractTags(transaction.note),
-                        onTagClick = { tag -> searchQuery = tag },
-                        onEditClick = { editingTransaction = transaction },
-                        onDeleteClick = { deleteWithUndo(transaction) },
+                    val dismissState = rememberSwipeToDismissBoxState(confirmValueChange = { value ->
+                        if (value == SwipeToDismissBoxValue.EndToStart) pendingDelete = transaction
+                        value != SwipeToDismissBoxValue.EndToStart
+                    })
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        backgroundContent = {
+                            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)).background(AlertRed).padding(horizontal = 20.dp), contentAlignment = Alignment.CenterEnd) {
+                                Icon(Icons.Default.Delete, contentDescription = "Delete transaction", tint = Color.White)
+                            }
+                        },
+                        enableDismissFromStartToEnd = false,
                         modifier = Modifier.animateItem()
-                    )
+                    ) {
+                        LogItem(
+                            transaction = transaction,
+                            accountName = accountName,
+                            categoryName = categoryName,
+                            tags = viewModel.extractTags(transaction.note),
+                            onTagClick = { tag -> searchQuery = tag },
+                            onEditClick = { editingTransaction = transaction },
+                            onDeleteClick = { pendingDelete = transaction }
+                        )
+                    }
                 }
             }
         }
+    }
+
+    pendingDelete?.let { transaction ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("Delete transaction?", color = TextPrimary) },
+            text = { Text("This changes the account balance. You can still use Undo immediately after confirming.", color = TextSecondary) },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingDelete = null
+                    deleteWithUndo(transaction)
+                }) { Text("Delete", color = AlertRed) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("Cancel", color = TextPrimary) }
+            },
+            containerColor = DarkSurface
+        )
     }
 
     // Edit Transaction Dialog
@@ -353,7 +386,8 @@ fun EditTransactionDialog(
     accounts: List<Account>,
     categories: List<Category>,
     onDismiss: () -> Unit,
-    onConfirm: (amount: Double, account: Account, category: Category?, note: String, date: Long) -> Unit
+    onConfirm: (amount: Double, account: Account, category: Category?, note: String, date: Long) -> Unit,
+    onSplitClick: (() -> Unit)? = null
 ) {
     var amountStr by remember { mutableStateOf(transaction.amount.toString()) }
     var note by remember { mutableStateOf(transaction.note) }
@@ -472,6 +506,14 @@ fun EditTransactionDialog(
                         }
                     }
                 }
+
+                if (onSplitClick != null && transaction.type == TransactionType.EXPENSE) {
+                    TextButton(onClick = onSplitClick, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.CallSplit, contentDescription = null, tint = PrimaryViolet, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Split Transaction", color = PrimaryViolet)
+                    }
+                }
             }
         },
         confirmButton = {
@@ -536,3 +578,79 @@ fun EditTransactionDialog(
     }
 }
 
+@Composable
+fun SplitTransactionDialog(
+    transaction: Transaction,
+    categories: List<Category>,
+    onDismiss: () -> Unit,
+    onConfirm: (splitAmount: Double, splitCategory: Category) -> Unit
+) {
+    var amountStr by remember { mutableStateOf("") }
+    var selectedCategory by remember {
+        mutableStateOf(categories.firstOrNull { it.id != transaction.categoryId })
+    }
+    var showCategoryMenu by remember { mutableStateOf(false) }
+
+    val amount = amountStr.toDoubleOrNull()
+    val isValid = amount != null && amount > 0.0 && amount < transaction.amount && selectedCategory != null
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Split Transaction", style = Typography.titleLarge.copy(color = TextPrimary)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "Move part of ${moneyString(transaction.amount)} into another envelope. The rest stays here.",
+                    style = Typography.bodySmall.copy(color = TextSecondary)
+                )
+                OutlinedTextField(
+                    value = amountStr,
+                    onValueChange = { amountStr = it },
+                    label = { Text("Amount to split off (₹)") },
+                    singleLine = true,
+                    isError = amountStr.isNotEmpty() && !isValid,
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { showCategoryMenu = true },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Into: ${selectedCategory?.name ?: "Select category"}", color = TextPrimary)
+                    }
+                    DropdownMenu(
+                        expanded = showCategoryMenu,
+                        onDismissRequest = { showCategoryMenu = false }
+                    ) {
+                        categories.forEach { category ->
+                            DropdownMenuItem(
+                                text = { Text(category.name) },
+                                onClick = {
+                                    selectedCategory = category
+                                    showCategoryMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            iOSButton(
+                onClick = { onConfirm(amount!!, selectedCategory!!) },
+                variant = iOSButtonVariant.Accent,
+                accentColor = PrimaryViolet,
+                enabled = isValid
+            ) {
+                Text("Split")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = TextSecondary)
+            }
+        },
+        containerColor = DarkSurface
+    )
+}

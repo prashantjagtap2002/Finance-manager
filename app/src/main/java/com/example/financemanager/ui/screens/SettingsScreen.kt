@@ -58,6 +58,20 @@ fun SettingsScreen(
     val isProUser by viewModel.isProUser.collectAsState()
     val scanCount by viewModel.scanCount.collectAsState()
     val context = LocalContext.current
+    val syncStatus by produceState("Automatic sync is enabled every 12 hours", context) {
+        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            runCatching {
+                WorkManager.getInstance(context).getWorkInfosForUniqueWork("CloudSyncWorker").get()
+            }.getOrNull()?.let { infos ->
+                when {
+                    infos.any { it.state == androidx.work.WorkInfo.State.RUNNING } -> "Syncing now…"
+                    infos.any { it.state == androidx.work.WorkInfo.State.FAILED } -> "Last sync failed — tap Sync Now to retry"
+                    infos.any { it.state == androidx.work.WorkInfo.State.SUCCEEDED } -> "Cloud sync is up to date"
+                    else -> "Automatic sync is enabled every 12 hours"
+                }
+            } ?: "Automatic sync is enabled every 12 hours"
+        }
+    }
 
     var showAddAccountDialog by remember { mutableStateOf(false) }
     var editingAccount by remember { mutableStateOf<Account?>(null) }
@@ -78,6 +92,20 @@ fun SettingsScreen(
                     context = context,
                     uri = uri,
                     onSuccess = { Toast.makeText(context, "Backup exported successfully!", Toast.LENGTH_SHORT).show() },
+                    onError = { err -> Toast.makeText(context, "Export failed: $err", Toast.LENGTH_LONG).show() }
+                )
+            }
+        }
+    )
+
+    val csvExportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/csv"),
+        onResult = { uri ->
+            if (uri != null) {
+                viewModel.exportTransactionsToUri(
+                    context = context,
+                    uri = uri,
+                    onSuccess = { Toast.makeText(context, "Transactions exported successfully!", Toast.LENGTH_SHORT).show() },
                     onError = { err -> Toast.makeText(context, "Export failed: $err", Toast.LENGTH_LONG).show() }
                 )
             }
@@ -410,17 +438,12 @@ fun SettingsScreen(
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         iOSButton(
                             onClick = {
-                                val path = viewModel.exportTransactionsToCsv(context)
-                                if (path != null) {
-                                    Toast.makeText(context, "Exported to $path", Toast.LENGTH_LONG).show()
-                                } else {
-                                    Toast.makeText(context, "Export failed or no data", Toast.LENGTH_SHORT).show()
-                                }
+                                csvExportLauncher.launch("transactions.csv")
                             },
                             variant = iOSButtonVariant.Accent, accentColor = PrimaryViolet,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Export Transactions to CSV")
+                            Text("Export to CSV / Excel")
                         }
                         
                         val importLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
@@ -461,6 +484,7 @@ fun SettingsScreen(
                             text = "Manually trigger a sync to back up your local database to Supabase Postgres.",
                             style = Typography.bodyMedium.copy(color = TextSecondary)
                         )
+                        Text(syncStatus, style = Typography.labelMedium.copy(color = if (syncStatus.contains("failed", true)) AlertRed else AccentGreen))
                         iOSButton(
                             onClick = { 
                                 val request = OneTimeWorkRequestBuilder<SyncWorker>().build()

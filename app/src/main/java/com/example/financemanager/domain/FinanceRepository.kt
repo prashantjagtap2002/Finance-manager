@@ -9,7 +9,9 @@ class FinanceRepository(private val dao: FinanceDao) {
     val accounts: Flow<List<Account>> = dao.getAccountsFlow()
     
     suspend fun getAccountById(id: Long): Account? = dao.getAccountById(id)
-    
+
+    suspend fun getAccountsOnce(): List<Account> = dao.getAccountsList()
+
     suspend fun insertAccount(account: Account): Long = dao.insertAccount(account)
     
     suspend fun updateAccount(account: Account) = dao.updateAccount(account)
@@ -97,6 +99,9 @@ class FinanceRepository(private val dao: FinanceDao) {
     }
     
     suspend fun getTransactionById(id: Long): Transaction? = dao.getTransactionById(id)
+
+    /** Earliest transaction date on record, or null when the ledger is empty. */
+    suspend fun getEarliestTransactionDate(): Long? = dao.getEarliestTransactionDate()
     
     /**
      * Records a transaction and moves the affected account balances with it. Callers must not
@@ -189,7 +194,13 @@ class FinanceRepository(private val dao: FinanceDao) {
         dao.clearDebts()
         dao.clearSmsTransactions()
         dao.clearMerchantRules()
+        clearExpenseGroups()
     }
+
+    suspend fun replaceBackupData(
+        accounts: List<Account>, categories: List<Category>, transactions: List<Transaction>,
+        recurring: List<RecurringTransaction>, goals: List<SavingsGoal>, debts: List<Debt>
+    ) = dao.replaceBackupData(accounts, categories, transactions, recurring, goals, debts)
 
     // Debts
     val debts: Flow<List<Debt>> = dao.getDebtsFlow()
@@ -199,6 +210,26 @@ class FinanceRepository(private val dao: FinanceDao) {
     suspend fun updateDebt(debt: Debt) = dao.updateDebt(debt)
 
     suspend fun deleteDebt(debt: Debt) = dao.deleteDebt(debt)
+
+    // Group expenses
+    val expenseGroups: Flow<List<ExpenseGroup>> = dao.getExpenseGroupsFlow()
+    suspend fun insertExpenseGroup(group: ExpenseGroup): Long = dao.insertExpenseGroup(group)
+    suspend fun updateExpenseGroup(group: ExpenseGroup) = dao.updateExpenseGroup(group)
+    suspend fun deleteExpenseGroup(group: ExpenseGroup) = dao.deleteExpenseGroup(group)
+    fun expenseGroupMembers(groupId: Long): Flow<List<ExpenseGroupMember>> = dao.getExpenseGroupMembersFlow(groupId)
+    suspend fun insertExpenseGroupMember(member: ExpenseGroupMember): Long = dao.insertExpenseGroupMember(member)
+    suspend fun updateExpenseGroupMember(member: ExpenseGroupMember) = dao.updateExpenseGroupMember(member)
+    suspend fun deleteExpenseGroupMember(member: ExpenseGroupMember) = dao.deleteExpenseGroupMember(member)
+    fun expenseGroupExpenses(groupId: Long): Flow<List<ExpenseGroupExpense>> = dao.getExpenseGroupExpensesFlow(groupId)
+    suspend fun insertExpenseGroupExpense(expense: ExpenseGroupExpense): Long = dao.insertExpenseGroupExpense(expense)
+    suspend fun updateExpenseGroupExpense(expense: ExpenseGroupExpense) = dao.updateExpenseGroupExpense(expense)
+    suspend fun deleteExpenseGroupExpense(expense: ExpenseGroupExpense) = dao.deleteExpenseGroupExpense(expense)
+
+    suspend fun clearExpenseGroups() {
+        dao.clearExpenseGroupExpenses()
+        dao.clearExpenseGroupMembers()
+        dao.clearExpenseGroups()
+    }
 
     // SMS Transactions
     val smsTransactions: Flow<List<SmsTransaction>> = dao.getSmsTransactionsFlow()
@@ -215,6 +246,33 @@ class FinanceRepository(private val dao: FinanceDao) {
     suspend fun updateSmsTransaction(smsTransaction: SmsTransaction) = dao.updateSmsTransaction(smsTransaction)
 
     suspend fun deleteSmsTransaction(smsTransaction: SmsTransaction) = dao.deleteSmsTransaction(smsTransaction)
+
+    /**
+     * Removes the transaction an approved SMS created and gives its balance effect back.
+     *
+     * Used when a pair of alerts turns out to cancel out — a self transfer logged as an expense,
+     * or an IPO block that was released — so the spending it inflated goes away with it.
+     * Approvals made before [SmsTransaction.loggedTransactionId] existed are matched on the same
+     * fields the approval wrote, which is the best that can be done for those older rows.
+     */
+    suspend fun revokeLoggedTransaction(sms: SmsTransaction) {
+        val logged = if (sms.loggedTransactionId > 0) {
+            dao.getTransactionById(sms.loggedTransactionId)
+        } else if (!sms.isApproved) {
+            null
+        } else {
+            val amount = SmsLinkDetector.amountOf(sms) ?: return
+            val type = if (sms.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE
+            dao.findDuplicateTransaction(
+                amount,
+                type.name,
+                sms.approvedCategoryId,
+                sms.approvedAccountId,
+                sms.rawTimestamp
+            )
+        }
+        logged?.let { AccountLedger.revoke(dao, it) }
+    }
 
     // Merchant → category rules
     val merchantRules: Flow<List<MerchantRule>> = dao.getMerchantRulesFlow()
@@ -243,5 +301,33 @@ class FinanceRepository(private val dao: FinanceDao) {
                 updatedAt = System.currentTimeMillis()
             )
         )
+    }
+
+    // Investments (stocks / mutual funds / SIPs)
+    val investments: Flow<List<Investment>> = dao.getInvestmentsFlow()
+    val investmentTransactions: Flow<List<InvestmentTransaction>> = dao.getInvestmentTransactionsFlow()
+
+    fun getInvestmentTransactionsFor(investmentId: Long): Flow<List<InvestmentTransaction>> =
+        dao.getInvestmentTransactionsForFlow(investmentId)
+
+    suspend fun getInvestmentById(id: Long): Investment? = dao.getInvestmentById(id)
+
+    suspend fun insertInvestment(investment: Investment): Long = dao.insertInvestment(investment)
+
+    suspend fun updateInvestment(investment: Investment) = dao.updateInvestment(investment)
+
+    suspend fun insertInvestmentTransaction(transaction: InvestmentTransaction): Long =
+        dao.insertInvestmentTransaction(transaction)
+
+    suspend fun updateInvestmentTransaction(transaction: InvestmentTransaction) =
+        dao.updateInvestmentTransaction(transaction)
+
+    suspend fun deleteInvestmentTransaction(transaction: InvestmentTransaction) =
+        dao.deleteInvestmentTransaction(transaction)
+
+    /** Deletes a holding along with every buy/sell/SIP installment logged against it. */
+    suspend fun deleteInvestment(investment: Investment) {
+        dao.deleteInvestmentTransactionsFor(investment.id)
+        dao.deleteInvestment(investment)
     }
 }

@@ -17,6 +17,15 @@ import com.example.financemanager.services.SyncWorker
 import com.example.financemanager.domain.MerchantKey
 import com.example.financemanager.domain.NlpParser
 import com.example.financemanager.domain.NlpResult
+import com.example.financemanager.domain.SmsLink
+import com.example.financemanager.domain.SmsLinkDetector
+import com.example.financemanager.domain.RESOLUTION_REVERSAL
+import com.example.financemanager.domain.RESOLUTION_TRANSFER
+import com.example.financemanager.domain.StockPriceService
+import com.example.financemanager.domain.YahooFinanceStockPriceService
+import com.example.financemanager.domain.GroupExpenseForSettlement
+import com.example.financemanager.domain.GroupSettlement
+import com.example.financemanager.domain.SettlementTransfer
 import com.example.financemanager.ui.components.moneyString
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -33,9 +42,22 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.util.Calendar
 
+/** Per-holding aggregate derived from an [Investment] and its buy/sell/SIP transaction history. */
+data class InvestmentHolding(
+    val investment: Investment,
+    val quantity: Double,
+    val avgBuyPrice: Double,
+    val investedAmount: Double,
+    val currentValue: Double,
+    val gainLoss: Double,
+    val gainLossPercent: Double,
+    val hasSip: Boolean
+)
+
 class FinanceViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: FinanceRepository
+    private val stockPriceService: StockPriceService = YahooFinanceStockPriceService()
     private val prefs = application.getSharedPreferences("finance_prefs", Context.MODE_PRIVATE)
 
     // DB Observables
@@ -47,7 +69,15 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     val sixMonthTrendData: StateFlow<Map<String, Double>>
     val debts: StateFlow<List<Debt>>
     val groupedDebts: StateFlow<Map<String, List<Debt>>>
+    val expenseGroups: StateFlow<List<ExpenseGroup>>
     val netWorthHistory: StateFlow<Map<String, Double>>
+
+    // Investments (stocks / mutual funds / SIPs)
+    val investments: StateFlow<List<Investment>>
+    val investmentTransactions: StateFlow<List<InvestmentTransaction>>
+    val portfolioHoldings: StateFlow<List<InvestmentHolding>>
+    private val _isRefreshingPrices = MutableStateFlow(false)
+    val isRefreshingPrices: StateFlow<Boolean> = _isRefreshingPrices.asStateFlow()
 
     // Spending for the CURRENT calendar month only (total + per category)
     val monthlyExpenseTotal: StateFlow<Double>
@@ -115,6 +145,15 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     val ignoredSmsTransactions: StateFlow<List<SmsTransaction>>
     val approvedSmsTransactions: StateFlow<List<SmsTransaction>>
 
+    // Debit/credit pairs that cancel each other out — a self transfer between the user's own
+    // accounts, or money that came back (refund, failed payment, IPO block released).
+    val smsLinks: StateFlow<List<SmsLink>>
+    private val _dismissedSmsLinkKeys = MutableStateFlow<Set<String>>(emptySet())
+
+    /** Summary of the last [importSmsXmlHistorical] run, or null once the caller has read it. */
+    private val _historicalImportResult = MutableStateFlow<String?>(null)
+    val historicalImportResult: StateFlow<String?> = _historicalImportResult.asStateFlow()
+
     init {
         FinancePreferences.init(application)
         val database = FinanceDatabase.getDatabase(application, viewModelScope)
@@ -129,6 +168,37 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         groupedDebts = debts.map { debtList ->
             debtList.groupBy { it.personName.trim().lowercase() }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+        expenseGroups = repository.expenseGroups.stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList()
+        )
+
+        investments = repository.investments.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        investmentTransactions = repository.investmentTransactions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        portfolioHoldings = combine(investments, investmentTransactions) { invs, txns ->
+            invs.map { inv ->
+                val invTxns = txns.filter { it.investmentId == inv.id }
+                val buys = invTxns.filter { it.type != InvestmentTxnType.SELL }
+                val sells = invTxns.filter { it.type == InvestmentTxnType.SELL }
+                val boughtQty = buys.sumOf { it.quantity }
+                val soldQty = sells.sumOf { it.quantity }
+                val netQty = boughtQty - soldQty
+                val avgBuyPrice = if (boughtQty > 0) buys.sumOf { it.amount } / boughtQty else 0.0
+                val investedAmount = netQty * avgBuyPrice
+                val currentValue = netQty * inv.currentPrice
+                val gainLoss = currentValue - investedAmount
+                val gainLossPercent = if (investedAmount > 0.0) (gainLoss / investedAmount) * 100 else 0.0
+                InvestmentHolding(
+                    investment = inv,
+                    quantity = netQty,
+                    avgBuyPrice = avgBuyPrice,
+                    investedAmount = investedAmount,
+                    currentValue = currentValue,
+                    gainLoss = gainLoss,
+                    gainLossPercent = gainLossPercent,
+                    hasSip = invTxns.any { it.isSip }
+                )
+            }
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
         merchantRules = repository.merchantRules
             .map { rules -> rules.associateBy { it.merchantKey } }
@@ -145,6 +215,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
         approvedSmsTransactions = repository.approvedSmsTransactions
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+        _dismissedSmsLinkKeys.value = FinancePreferences.dismissedSmsLinks()
+        smsLinks = combine(repository.smsTransactions, _dismissedSmsLinkKeys) { all, dismissed ->
+            SmsLinkDetector.detect(all, dismissed)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
         // Restore persisted UI preferences
         AppLock.init(application)
@@ -637,6 +712,148 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Splits part of an already-logged transaction off into a different envelope. Shrinks
+     * [original] by [splitAmount] and inserts a new transaction for that amount under
+     * [splitCategoryId], sharing a splitGroupId so both halves stay traceable to one another.
+     */
+    fun splitTransaction(original: Transaction, splitAmount: Double, splitCategoryId: Long) {
+        if (splitAmount <= 0.0 || splitAmount >= original.amount) return
+        viewModelScope.launch {
+            val groupId = original.splitGroupId ?: java.util.UUID.randomUUID().toString()
+            val remainder = original.copy(
+                amount = original.amount - splitAmount,
+                splitGroupId = groupId
+            )
+            repository.updateTransaction(original, remainder)
+            repository.insertTransaction(
+                original.copy(
+                    id = 0,
+                    amount = splitAmount,
+                    categoryId = splitCategoryId,
+                    splitGroupId = groupId
+                )
+            )
+            checkBudgetThreshold(splitCategoryId, splitAmount)
+        }
+    }
+
+    // --- Investments (stocks / mutual funds / SIPs) ---
+
+    fun addInvestment(name: String, symbol: String?, exchange: String?, type: InvestmentType) {
+        viewModelScope.launch {
+            repository.insertInvestment(
+                Investment(name = name, symbol = symbol, exchange = exchange, type = type)
+            )
+        }
+    }
+
+    fun deleteInvestment(investment: Investment) {
+        viewModelScope.launch { repository.deleteInvestment(investment) }
+    }
+
+    /** Records a buy or SIP installment: adds a lot and debits the funding account via the ledger. */
+    fun recordInvestmentBuy(
+        investment: Investment,
+        quantity: Double,
+        pricePerUnit: Double,
+        accountId: Long,
+        date: Long,
+        isSip: Boolean
+    ) {
+        if (quantity <= 0.0 || pricePerUnit <= 0.0) return
+        viewModelScope.launch {
+            val amount = quantity * pricePerUnit
+            repository.insertInvestmentTransaction(
+                InvestmentTransaction(
+                    investmentId = investment.id,
+                    type = if (isSip) InvestmentTxnType.SIP_INSTALLMENT else InvestmentTxnType.BUY,
+                    quantity = quantity,
+                    pricePerUnit = pricePerUnit,
+                    amount = amount,
+                    date = date,
+                    sourceAccountId = accountId,
+                    isSip = isSip
+                )
+            )
+            repository.postLedgerSideEffect(accountId, -amount, "Invested in ${investment.name}", date)
+        }
+    }
+
+    /** Records a sell and credits the sale proceeds back to the account via the ledger. */
+    fun recordInvestmentSell(
+        investment: Investment,
+        quantity: Double,
+        pricePerUnit: Double,
+        accountId: Long,
+        date: Long
+    ) {
+        if (quantity <= 0.0 || pricePerUnit <= 0.0) return
+        viewModelScope.launch {
+            val amount = quantity * pricePerUnit
+            repository.insertInvestmentTransaction(
+                InvestmentTransaction(
+                    investmentId = investment.id,
+                    type = InvestmentTxnType.SELL,
+                    quantity = quantity,
+                    pricePerUnit = pricePerUnit,
+                    amount = amount,
+                    date = date,
+                    sourceAccountId = accountId
+                )
+            )
+            repository.postLedgerSideEffect(accountId, amount, "Sold ${investment.name}", date)
+        }
+    }
+
+    fun updateInvestmentTransaction(transaction: InvestmentTransaction) {
+        viewModelScope.launch { repository.updateInvestmentTransaction(transaction) }
+    }
+
+    /** Deletes a logged buy/sell/SIP row and reverses its ledger effect on the funding account. */
+    fun deleteInvestmentTransaction(transaction: InvestmentTransaction) {
+        viewModelScope.launch {
+            repository.deleteInvestmentTransaction(transaction)
+            val reversal = when (transaction.type) {
+                InvestmentTxnType.SELL -> -transaction.amount
+                else -> transaction.amount
+            }
+            repository.postLedgerSideEffect(
+                transaction.sourceAccountId,
+                reversal,
+                "Reversed investment log",
+                System.currentTimeMillis()
+            )
+        }
+    }
+
+    /** Refreshes cached prices for every holding that has a symbol. Failures keep the old price. */
+    fun refreshAllPrices() {
+        viewModelScope.launch {
+            _isRefreshingPrices.value = true
+            try {
+                investments.value.forEach { inv ->
+                    val symbol = inv.symbol ?: return@forEach
+                    val price = stockPriceService.getPrice(symbol, inv.exchange)
+                    if (price != null) {
+                        repository.updateInvestment(
+                            inv.copy(currentPrice = price, lastPriceUpdate = System.currentTimeMillis())
+                        )
+                    }
+                }
+            } finally {
+                _isRefreshingPrices.value = false
+            }
+        }
+    }
+
+    fun updateInvestmentPriceManually(investment: Investment, price: Double) {
+        if (price <= 0.0) return
+        viewModelScope.launch {
+            repository.updateInvestment(investment.copy(currentPrice = price, lastPriceUpdate = System.currentTimeMillis()))
+        }
+    }
+
     // --- Calculator Arithmetic Logic ---
     fun onCalculatorKeyPress(key: String) {
         val current = _amountInput.value
@@ -1092,19 +1309,46 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         return try {
             val directory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
             val file = File(directory, "transactions_export.csv")
-            val writer = FileWriter(file)
-            
-            // Write CSV headers
-            writer.append("ID,Amount,Type,CategoryId,AccountId,Note,Date,Merchant\n")
-            
-            for (t in list) {
-                writer.append("${t.id},${t.amount},${t.type},${t.categoryId},${t.sourceAccountId},\"${t.note}\",${t.date},\"${t.merchantName ?: ""}\"\n")
-            }
-            writer.flush()
-            writer.close()
+            FileWriter(file).use { it.write(transactionCsv(list)) }
             file.absolutePath
         } catch (e: Exception) {
             null
+        }
+    }
+
+    fun exportTransactionsToUri(context: Context, uri: Uri, onSuccess: () -> Unit, onError: (String) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use {
+                    it.write(transactionCsv(transactions.value))
+                } ?: error("Unable to open selected file")
+                withContext(Dispatchers.Main) { onSuccess() }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { onError(e.localizedMessage ?: "Unable to export CSV") }
+            }
+        }
+    }
+
+    private fun transactionCsv(list: List<Transaction>): String {
+        val categoryById = categories.value.associateBy { it.id }
+        val accountById = accounts.value.associateBy { it.id }
+        val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+        fun csv(value: String): String = "\"${value.replace("\"", "\"\"")}\""
+
+        return buildString {
+                append("Date,Merchant,Category,Account,Amount,Note,Type,CategoryId,AccountId,Timestamp\r\n")
+                list.sortedByDescending { it.date }.forEach { transaction ->
+                append(csv(dateFormat.format(java.util.Date(transaction.date))))
+                append(',').append(csv(transaction.merchantName.orEmpty()))
+                append(',').append(csv(categoryById[transaction.categoryId]?.name.orEmpty()))
+                append(',').append(csv(accountById[transaction.sourceAccountId]?.name.orEmpty()))
+                append(',').append(transaction.amount)
+                append(',').append(csv(transaction.note))
+                append(',').append(transaction.type.name)
+                append(',').append(transaction.categoryId)
+                append(',').append(transaction.sourceAccountId)
+                append(',').append(transaction.date).append("\r\n")
+            }
         }
     }
 
@@ -1118,14 +1362,20 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     for (i in 1 until rows.size) {
                         val row = rows[i]
                         val parts = row.split(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)".toRegex())
-                        if (parts.size >= 8) {
-                            val amount = parts[1].toDoubleOrNull() ?: continue
-                            val type = TransactionType.valueOf(parts[2])
-                            val categoryId = parts[3].toLongOrNull() ?: 1L
-                            val accountId = parts[4].toLongOrNull() ?: 1L
+                        if (parts.size >= 6) {
+                            val legacy = parts.size < 10
+                            val dateText = parts[0].trim('"')
+                            val date = if (legacy) {
+                                runCatching { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).parse(dateText)?.time }.getOrNull()
+                            } else parts[9].trim('"').toLongOrNull()
+                            val merchant = parts[1].trim('"').takeIf { it.isNotBlank() }
+                            val categoryName = parts[2].trim('"')
+                            val accountName = parts[3].trim('"')
+                            val amount = parts[4].trim('"').toDoubleOrNull() ?: continue
                             val note = parts[5].trim('"')
-                            val date = parts[6].toLongOrNull() ?: System.currentTimeMillis()
-                            val merchant = parts[7].trim('"').takeIf { it.isNotBlank() }
+                            val type = if (!legacy) runCatching { TransactionType.valueOf(parts[6].trim('"')) }.getOrDefault(TransactionType.EXPENSE) else TransactionType.EXPENSE
+                            val categoryId = if (!legacy) parts[7].trim('"').toLongOrNull() ?: 0L else categories.value.firstOrNull { it.name.equals(categoryName, true) }?.id ?: 0L
+                            val accountId = if (!legacy) parts[8].trim('"').toLongOrNull() ?: 0L else accounts.value.firstOrNull { it.name.equals(accountName, true) }?.id ?: 0L
 
                             repository.insertTransaction(
                                 Transaction(
@@ -1134,7 +1384,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                                     categoryId = categoryId,
                                     sourceAccountId = accountId,
                                     note = note,
-                                    date = date,
+                                    date = date ?: System.currentTimeMillis(),
                                     merchantName = merchant
                                 )
                             )
@@ -1220,6 +1470,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                             put("type", account.type.name)
                             put("balance", account.balance)
                             put("currency", account.currency)
+                            put("openingBalance", account.openingBalance)
                         })
                     }
                     put("accounts", accountsArray)
@@ -1259,6 +1510,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                             put("merchantName", trans.merchantName ?: JSONObject.NULL)
                             put("originalAmount", trans.originalAmount ?: JSONObject.NULL)
                             put("originalCurrency", trans.originalCurrency ?: JSONObject.NULL)
+                            put("isVerified", trans.isVerified)
                         })
                     }
                     put("transactions", transactionsArray)
@@ -1354,7 +1606,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                             name = obj.getString("name"),
                             type = AccountType.valueOf(obj.getString("type")),
                             balance = obj.getDouble("balance"),
-                            currency = obj.optString("currency", "INR")
+                            currency = obj.optString("currency", "INR"),
+                            openingBalance = obj.optDouble("openingBalance", 0.0)
                         ))
                     }
                 }
@@ -1405,7 +1658,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                             isAutoLogged = obj.optBoolean("isAutoLogged", false),
                             merchantName = merchant,
                             originalAmount = origAmt,
-                            originalCurrency = origCurr
+                            originalCurrency = origCurr,
+                            isVerified = obj.optBoolean("isVerified", true)
                         ))
                     }
                 }
@@ -1473,17 +1727,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 }
 
                 // Wipe existing database and restore backup
-                repository.clearAllTables()
+                repository.replaceBackupData(accountsList, categoriesList, transactionsList, recurringList, goalsList, debtsList)
 
                 // Insert all elements back. Transactions bypass the ledger here — the accounts
                 // above were restored with their closing balances already baked in, so replaying
                 // each transaction would apply every movement twice.
-                accountsList.forEach { repository.insertAccount(it) }
-                categoriesList.forEach { repository.insertCategory(it) }
-                transactionsList.forEach { repository.insertTransactionFromBackup(it) }
-                recurringList.forEach { repository.insertRecurringTransaction(it) }
-                goalsList.forEach { repository.insertSavingsGoal(it) }
-                debtsList.forEach { repository.insertDebt(it) }
 
                 // Older backups have no opening balances, so derive them from what was restored.
                 repository.rebaseOpeningBalances()
@@ -1529,6 +1777,82 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    // --- Group expenses ---
+    fun expenseGroupMembers(groupId: Long): Flow<List<ExpenseGroupMember>> =
+        repository.expenseGroupMembers(groupId)
+
+    fun expenseGroupExpenses(groupId: Long): Flow<List<ExpenseGroupExpense>> =
+        repository.expenseGroupExpenses(groupId)
+
+    fun createExpenseGroup(name: String, currentUserName: String, upiId: String) {
+        viewModelScope.launch {
+            val groupId = repository.insertExpenseGroup(ExpenseGroup(name = name.trim()))
+            repository.insertExpenseGroupMember(
+                ExpenseGroupMember(
+                    groupId = groupId,
+                    name = currentUserName.trim(),
+                    upiId = upiId.trim(),
+                    isCurrentUser = true
+                )
+            )
+        }
+    }
+
+    fun addExpenseGroupMember(groupId: Long, name: String, upiId: String) {
+        viewModelScope.launch {
+            repository.insertExpenseGroupMember(
+                ExpenseGroupMember(groupId = groupId, name = name.trim(), upiId = upiId.trim())
+            )
+        }
+    }
+
+    fun addExpenseGroupExpense(
+        groupId: Long,
+        description: String,
+        amount: Double,
+        paidByMemberId: Long,
+        participantMemberIds: List<Long>
+    ) {
+        if (amount <= 0.0 || participantMemberIds.isEmpty()) return
+        viewModelScope.launch {
+            repository.insertExpenseGroupExpense(
+                ExpenseGroupExpense(
+                    groupId = groupId,
+                    description = description.trim(),
+                    amount = amount,
+                    paidByMemberId = paidByMemberId,
+                    participantMemberIds = participantMemberIds.distinct().joinToString(",")
+                )
+            )
+        }
+    }
+
+    fun deleteExpenseGroupExpense(expense: ExpenseGroupExpense) {
+        viewModelScope.launch { repository.deleteExpenseGroupExpense(expense) }
+    }
+
+    fun deleteExpenseGroup(group: ExpenseGroup) {
+        viewModelScope.launch {
+            expenseGroupMembers(group.id).first().forEach { repository.deleteExpenseGroupMember(it) }
+            expenseGroupExpenses(group.id).first().forEach { repository.deleteExpenseGroupExpense(it) }
+            repository.deleteExpenseGroup(group)
+        }
+    }
+
+    fun calculateGroupSettlements(
+        members: List<ExpenseGroupMember>,
+        expenses: List<ExpenseGroupExpense>
+    ): List<SettlementTransfer> = GroupSettlement.calculate(
+        members = members.map { it.id },
+        expenses = expenses.map {
+            GroupExpenseForSettlement(
+                amount = it.amount,
+                paidByMemberId = it.paidByMemberId,
+                participantIds = it.participantMemberIds.split(",").mapNotNull(String::toLongOrNull)
+            )
+        }
+    )
+
     fun recordDebtPayment(debt: Debt, paymentAmount: Double, account: Account) {
         viewModelScope.launch {
             val newPaidAmount = debt.paidAmount + paymentAmount
@@ -1553,6 +1877,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 date = System.currentTimeMillis()
             )
             repository.insertTransaction(transaction)
+
+            // Update account balance
+            val newBalance = if (txType == TransactionType.INCOME) account.balance + paymentAmount else account.balance - paymentAmount
+            repository.updateAccount(account.copy(balance = newBalance))
+            SyncWorker.enqueueNow(getApplication())
         }
     }
 
@@ -1585,14 +1914,15 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         txTypeOverride: TransactionType? = null
     ) {
         viewModelScope.launch {
-            val amount = smsTransaction.amount.replace("Rs.", "").trim().toDoubleOrNull() ?: 0.0
+        val amount = com.example.financemanager.domain.SmsAmountFormatter.number(smsTransaction.amount)
+            .toDoubleOrNull() ?: 0.0
             val txType = txTypeOverride ?: if (smsTransaction.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE
 
             val finalNote = note.ifEmpty {
                 smsTransaction.counterparty.ifEmpty { smsTransaction.accountName }
             }
 
-            repository.insertTransaction(
+            val loggedId = repository.insertTransaction(
                 Transaction(
                     amount = amount,
                     type = txType,
@@ -1613,7 +1943,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     isApproved = true,
                     isIgnored = false,
                     approvedCategoryId = categoryId,
-                    approvedAccountId = accountId
+                    approvedAccountId = accountId,
+                    loggedTransactionId = loggedId,
+                    linkedSmsId = 0,
+                    resolution = ""
                 )
             )
 
@@ -1622,6 +1955,119 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
             SyncWorker.enqueueNow(getApplication())
         }
+    }
+
+    /**
+     * Logs a matched pair as one transfer between the user's own accounts.
+     *
+     * The two alerts describe a single movement, so they become a single TRANSFER row: money
+     * leaves [fromAccountId] and lands in [toAccountId], with neither side touching an envelope.
+     * Anything either leg was already logged as is revoked first, so approving the debit as an
+     * expense before the credit arrived doesn't leave the spending behind.
+     */
+    fun resolveSmsLinkAsTransfer(
+        link: SmsLink,
+        fromAccountId: Long,
+        toAccountId: Long,
+        note: String = ""
+    ) {
+        if (fromAccountId <= 0 || toAccountId <= 0 || fromAccountId == toAccountId) return
+        viewModelScope.launch {
+            repository.revokeLoggedTransaction(link.debit)
+            repository.revokeLoggedTransaction(link.credit)
+
+            val fromName = accounts.value.find { it.id == fromAccountId }?.name ?: "account"
+            val toName = accounts.value.find { it.id == toAccountId }?.name ?: "account"
+            val loggedId = repository.insertTransaction(
+                Transaction(
+                    amount = link.amount,
+                    type = TransactionType.TRANSFER,
+                    categoryId = 0L,
+                    sourceAccountId = fromAccountId,
+                    destinationAccountId = toAccountId,
+                    note = note.ifEmpty { "Self transfer: $fromName to $toName" },
+                    date = link.debit.rawTimestamp,
+                    isAutoLogged = true,
+                    isVerified = true
+                )
+            )
+
+            repository.updateSmsTransaction(
+                link.debit.copy(
+                    isApproved = true,
+                    isIgnored = false,
+                    approvedCategoryId = 0L,
+                    approvedAccountId = fromAccountId,
+                    loggedTransactionId = loggedId,
+                    linkedSmsId = link.credit.id,
+                    resolution = RESOLUTION_TRANSFER
+                )
+            )
+            // The credit leg carries no transaction of its own — the transfer above already
+            // credits the destination account.
+            repository.updateSmsTransaction(
+                link.credit.copy(
+                    isApproved = true,
+                    isIgnored = false,
+                    approvedCategoryId = 0L,
+                    approvedAccountId = toAccountId,
+                    loggedTransactionId = 0L,
+                    linkedSmsId = link.debit.id,
+                    resolution = RESOLUTION_TRANSFER
+                )
+            )
+
+            SyncWorker.enqueueNow(getApplication())
+        }
+    }
+
+    /**
+     * Settles a matched pair as money that came back — a refund, a failed payment, or an IPO
+     * block released because nothing was allotted.
+     *
+     * Nothing is logged at all: the account ended up exactly where it started, so a pair of
+     * offsetting rows would only add noise, and any expense already recorded for the debit leg is
+     * removed. That is what stops an unallotted IPO from sitting in the spending total forever.
+     */
+    fun resolveSmsLinkAsReversal(link: SmsLink) {
+        viewModelScope.launch {
+            repository.revokeLoggedTransaction(link.debit)
+            repository.revokeLoggedTransaction(link.credit)
+
+            repository.updateSmsTransaction(
+                link.debit.copy(
+                    isApproved = true,
+                    isIgnored = false,
+                    approvedCategoryId = 0L,
+                    loggedTransactionId = 0L,
+                    linkedSmsId = link.credit.id,
+                    resolution = RESOLUTION_REVERSAL
+                )
+            )
+            repository.updateSmsTransaction(
+                link.credit.copy(
+                    isApproved = true,
+                    isIgnored = false,
+                    approvedCategoryId = 0L,
+                    loggedTransactionId = 0L,
+                    linkedSmsId = link.debit.id,
+                    resolution = RESOLUTION_REVERSAL
+                )
+            )
+
+            SyncWorker.enqueueNow(getApplication())
+        }
+    }
+
+    /** Hides a suggested pair for good — the two alerts are unrelated. */
+    fun dismissSmsLink(link: SmsLink) {
+        _dismissedSmsLinkKeys.value = FinancePreferences.dismissSmsLink(link.key)
+    }
+
+    /** Brings every dismissed suggestion back, for when one was waved away by mistake. */
+    fun restoreDismissedSmsLinks() {
+        _dismissedSmsLinkKeys.value.forEach { FinancePreferences.restoreSmsLink(it) }
+        _dismissedSmsLinkKeys.value = FinancePreferences.dismissedSmsLinks()
     }
 
     fun approveSmsAsDebtPayment(
@@ -1671,14 +2117,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun getSmsTransactionsList(): List<SmsTransaction> {
-        var result = emptyList<SmsTransaction>()
-        val job = viewModelScope.launch {
-            result = repository.getSmsTransactionsList()
-        }
-        kotlinx.coroutines.runBlocking { job.join() }
-        return result
-    }
+    suspend fun getSmsTransactionsList(): List<SmsTransaction> = repository.getSmsTransactionsList()
 
     fun importSmsJson(context: Context, uri: Uri) {
         viewModelScope.launch {
@@ -1738,6 +2177,142 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 e.printStackTrace()
             }
         }
+    }
+
+    /**
+     * Backfills transaction history from an SMS Backup & Restore XML export, for the period
+     * before the user started using the app.
+     *
+     * Only messages older than the earliest transaction already on record are considered — the
+     * cutoff is derived from the ledger itself, so anything the user has entered (manually or via
+     * the normal SMS review flow) is never touched or duplicated. Matched accounts (by loose
+     * name match, e.g. "Kotak" against an existing "Kotak Bank") get their transactions posted
+     * without moving their current balance, since that already reflects today's reality; the
+     * balance shift instead lands on [FinanceRepository.rebaseOpeningBalances] pushing the
+     * opening balance further into the past. A brand new account created purely to hold this
+     * history has no such "today" to protect, so its balance is left to accumulate normally.
+     */
+    fun importSmsXmlHistorical(context: Context, uri: Uri) {
+        viewModelScope.launch {
+            var imported = 0
+            var duplicates = 0
+            var accountsCreated = 0
+            try {
+                val cutoff = repository.getEarliestTransactionDate() ?: Long.MAX_VALUE
+                val knownAccounts = repository.getAccountsOnce().toMutableList()
+                val newlyCreatedAccountIds = mutableSetOf<Long>()
+
+                suspend fun findOrCreateAccount(parsedName: String): Account {
+                    val trimmed = parsedName.trim().ifEmpty { "Imported" }
+                    knownAccounts.firstOrNull {
+                        it.name.contains(trimmed, ignoreCase = true) || trimmed.contains(it.name, ignoreCase = true)
+                    }?.let { return it }
+
+                    val isWallet = Regex("pay|wallet|paytm", RegexOption.IGNORE_CASE).containsMatchIn(trimmed)
+                    val newId = repository.insertAccount(
+                        Account(
+                            name = trimmed,
+                            type = if (isWallet) AccountType.WALLET else AccountType.BANK,
+                            balance = 0.0,
+                            openingBalance = 0.0
+                        )
+                    )
+                    val created = Account(id = newId, name = trimmed, type = if (isWallet) AccountType.WALLET else AccountType.BANK, balance = 0.0, openingBalance = 0.0)
+                    knownAccounts.add(created)
+                    newlyCreatedAccountIds.add(newId)
+                    accountsCreated++
+                    return created
+                }
+
+                context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                    val parser = android.util.Xml.newPullParser()
+                    parser.setInput(inputStream, null)
+                    var eventType = parser.eventType
+                    while (eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                        if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG && parser.name == "sms") {
+                            val sender = parser.getAttributeValue(null, "address") ?: ""
+                            val body = parser.getAttributeValue(null, "body") ?: ""
+                            val timestamp = parser.getAttributeValue(null, "date")?.toLongOrNull()
+
+                            if (timestamp != null && timestamp < cutoff && sender.isNotBlank() && body.isNotBlank()) {
+                                val parsed = com.example.financemanager.domain.SmsParser.parse(sender, body)
+                                val amountValue = parsed?.amount?.removePrefix("Rs.")?.replace(",", "")?.trim()?.toDoubleOrNull()
+
+                                if (parsed != null && amountValue != null && amountValue > 0.0) {
+                                    val smsHash = buildSmsHash(parsed.rawSender, parsed.rawMessage, timestamp)
+                                    if (repository.getSmsTransactionByHash(smsHash) == null) {
+                                        val account = findOrCreateAccount(parsed.accountName)
+                                        val merchantKey = MerchantKey.normalize(parsed.counterparty)
+                                        val categoryId = merchantKey.takeIf { it.isNotEmpty() }
+                                            ?.let { repository.getMerchantRule(it) }
+                                            ?.categoryId ?: 0L
+                                        val txType = if (parsed.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE
+
+                                        val transaction = Transaction(
+                                            amount = amountValue,
+                                            type = txType,
+                                            categoryId = categoryId,
+                                            sourceAccountId = account.id,
+                                            note = parsed.counterparty.ifEmpty { parsed.accountName },
+                                            date = timestamp,
+                                            isAutoLogged = true,
+                                            isVerified = true,
+                                            merchantName = parsed.counterparty.ifEmpty { parsed.rawSender }
+                                        )
+                                        val loggedId = if (account.id in newlyCreatedAccountIds) {
+                                            repository.insertTransaction(transaction)
+                                        } else {
+                                            repository.insertTransactionFromBackup(transaction)
+                                        }
+
+                                        repository.insertSmsTransaction(
+                                            SmsTransaction(
+                                                smsHash = smsHash,
+                                                sender = parsed.rawSender,
+                                                body = parsed.rawMessage,
+                                                accountName = parsed.accountName,
+                                                type = parsed.type,
+                                                amount = parsed.amount,
+                                                balance = parsed.balance,
+                                                counterparty = parsed.counterparty,
+                                                reference = parsed.reference,
+                                                rawTimestamp = timestamp,
+                                                isApproved = true,
+                                                approvedCategoryId = categoryId,
+                                                approvedAccountId = account.id,
+                                                loggedTransactionId = loggedId
+                                            )
+                                        )
+                                        imported++
+                                    } else {
+                                        duplicates++
+                                    }
+                                }
+                            }
+                        }
+                        eventType = parser.next()
+                    }
+                }
+
+                // Existing accounts kept their current balance pinned above; fold the historical
+                // net effect into their opening balance instead so the ledger invariant holds.
+                repository.rebaseOpeningBalances()
+
+                _historicalImportResult.value =
+                    "Imported $imported historical transaction(s)" +
+                        (if (accountsCreated > 0) " into $accountsCreated new account(s)" else "") +
+                        (if (duplicates > 0) ", skipped $duplicates already on record" else "") + "."
+
+                SyncWorker.enqueueNow(getApplication())
+            } catch (e: Exception) {
+                e.printStackTrace()
+                _historicalImportResult.value = "Import failed: ${e.message}"
+            }
+        }
+    }
+
+    fun clearHistoricalImportResult() {
+        _historicalImportResult.value = null
     }
 
     private fun extractSmsTimestamp(obj: JSONObject, index: Int, totalCount: Int): Long {

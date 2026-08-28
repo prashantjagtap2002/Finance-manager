@@ -55,6 +55,10 @@ interface FinanceDao : LedgerStore {
     @Query("SELECT * FROM transactions")
     suspend fun getTransactionsList(): List<Transaction>
 
+    /** Earliest transaction date on record, or null when the ledger is empty. */
+    @Query("SELECT MIN(date) FROM transactions")
+    suspend fun getEarliestTransactionDate(): Long?
+
     @Query("SELECT * FROM transactions WHERE date >= :start AND date <= :end ORDER BY date DESC")
     fun getTransactionsBetweenDatesFlow(start: Long, end: Long): Flow<List<Transaction>>
 
@@ -250,4 +254,96 @@ interface FinanceDao : LedgerStore {
 
     @Query("DELETE FROM merchant_rules")
     suspend fun clearMerchantRules()
+
+    // Investments (stocks / mutual funds / SIPs)
+    @Query("SELECT * FROM investments ORDER BY name ASC")
+    fun getInvestmentsFlow(): Flow<List<Investment>>
+
+    @Query("SELECT * FROM investments WHERE id = :id")
+    suspend fun getInvestmentById(id: Long): Investment?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertInvestment(investment: Investment): Long
+
+    @Update
+    suspend fun updateInvestment(investment: Investment)
+
+    @Delete
+    suspend fun deleteInvestment(investment: Investment)
+
+    @Query("SELECT * FROM investment_transactions ORDER BY date DESC")
+    fun getInvestmentTransactionsFlow(): Flow<List<InvestmentTransaction>>
+
+    @Query("SELECT * FROM investment_transactions WHERE investmentId = :investmentId ORDER BY date DESC")
+    fun getInvestmentTransactionsForFlow(investmentId: Long): Flow<List<InvestmentTransaction>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertInvestmentTransaction(transaction: InvestmentTransaction): Long
+
+    @Update
+    suspend fun updateInvestmentTransaction(transaction: InvestmentTransaction)
+
+    @Delete
+    suspend fun deleteInvestmentTransaction(transaction: InvestmentTransaction)
+
+    @Query("DELETE FROM investment_transactions WHERE investmentId = :investmentId")
+    suspend fun deleteInvestmentTransactionsFor(investmentId: Long)
+
+    // Group expenses
+    @Query("SELECT * FROM expense_groups ORDER BY createdAt DESC")
+    fun getExpenseGroupsFlow(): Flow<List<ExpenseGroup>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertExpenseGroup(group: ExpenseGroup): Long
+
+    @Update
+    suspend fun updateExpenseGroup(group: ExpenseGroup)
+
+    @Delete
+    suspend fun deleteExpenseGroup(group: ExpenseGroup)
+
+    @Query("SELECT * FROM expense_group_members WHERE groupId = :groupId ORDER BY id ASC")
+    fun getExpenseGroupMembersFlow(groupId: Long): Flow<List<ExpenseGroupMember>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertExpenseGroupMember(member: ExpenseGroupMember): Long
+
+    @Update
+    suspend fun updateExpenseGroupMember(member: ExpenseGroupMember)
+
+    @Delete
+    suspend fun deleteExpenseGroupMember(member: ExpenseGroupMember)
+
+    @Query("SELECT * FROM expense_group_expenses WHERE groupId = :groupId ORDER BY date DESC")
+    fun getExpenseGroupExpensesFlow(groupId: Long): Flow<List<ExpenseGroupExpense>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertExpenseGroupExpense(expense: ExpenseGroupExpense): Long
+
+    @Update
+    suspend fun updateExpenseGroupExpense(expense: ExpenseGroupExpense)
+
+    @Delete
+    suspend fun deleteExpenseGroupExpense(expense: ExpenseGroupExpense)
+
+    @Query("DELETE FROM expense_groups")
+    suspend fun clearExpenseGroups()
+
+    @Query("DELETE FROM expense_group_members")
+    suspend fun clearExpenseGroupMembers()
+
+    @Query("DELETE FROM expense_group_expenses")
+    suspend fun clearExpenseGroupExpenses()
+
+    /** Replaces restorable core data atomically so a failed backup import rolls back completely. */
+    @androidx.room.Transaction
+    suspend fun replaceBackupData(
+        accounts: List<Account>, categories: List<Category>, transactions: List<Transaction>,
+        recurring: List<RecurringTransaction>, goals: List<SavingsGoal>, debts: List<Debt>
+    ) {
+        clearAccounts(); clearCategories(); clearTransactions(); clearRecurringTransactions(); clearSavingsGoals(); clearDebts()
+        accounts.forEach { insertAccount(it) }; categories.forEach { insertCategory(it) }
+        transactions.forEach { insertTransaction(it) }; recurring.forEach { insertRecurringTransaction(it) }
+        goals.forEach { insertSavingsGoal(it) }; debts.forEach { insertDebt(it) }
+    }
 }

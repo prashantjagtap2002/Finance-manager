@@ -20,6 +20,43 @@ enum class DebtType {
     LENT, BORROWED
 }
 
+enum class InvestmentType {
+    STOCK, MUTUAL_FUND
+}
+
+enum class InvestmentTxnType {
+    BUY, SELL, SIP_INSTALLMENT
+}
+
+@Entity(tableName = "expense_groups")
+data class ExpenseGroup(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val currency: String = "INR",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "expense_group_members", indices = [Index(value = ["groupId"])])
+data class ExpenseGroupMember(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val groupId: Long,
+    val name: String,
+    val upiId: String = "",
+    val isCurrentUser: Boolean = false
+)
+
+@Entity(tableName = "expense_group_expenses", indices = [Index(value = ["groupId"])])
+data class ExpenseGroupExpense(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val groupId: Long,
+    val description: String,
+    val amount: Double,
+    val paidByMemberId: Long,
+    /** Comma-separated member ids. A receipt can be split among any subset of the group. */
+    val participantMemberIds: String,
+    val date: Long = System.currentTimeMillis()
+)
+
 @Entity(tableName = "accounts")
 data class Account(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -129,7 +166,43 @@ data class SmsTransaction(
     val isApproved: Boolean = false,
     val isIgnored: Boolean = false,
     val approvedCategoryId: Long = 0,
-    val approvedAccountId: Long = 0
+    val approvedAccountId: Long = 0,
+    /**
+     * The transaction this alert was logged as, or 0 when it hasn't been approved (or was
+     * approved by a version that didn't record the link). Without it, undoing an approval — which
+     * is what resolving a refund does — has to guess which row to remove.
+     */
+    val loggedTransactionId: Long = 0,
+    /** The other leg of a self transfer or refund, once the pair has been resolved together. */
+    val linkedSmsId: Long = 0,
+    /** How the pair was resolved: `""`, `"TRANSFER"` or `"REVERSAL"`. */
+    val resolution: String = ""
+)
+
+@Entity(tableName = "investments")
+data class Investment(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val symbol: String? = null, // Ticker for live price lookup, e.g. "TCS", "RELIANCE"
+    val exchange: String? = null, // "NSE" or "BSE"
+    val type: InvestmentType,
+    val currentPrice: Double = 0.0, // Last known price/NAV per unit, cached for offline display
+    val lastPriceUpdate: Long = 0,
+    val currency: String = "INR",
+    val notes: String = ""
+)
+
+@Entity(tableName = "investment_transactions")
+data class InvestmentTransaction(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val investmentId: Long,
+    val type: InvestmentTxnType,
+    val quantity: Double,
+    val pricePerUnit: Double,
+    val amount: Double, // quantity * pricePerUnit, stored to avoid recomputation/rounding drift
+    val date: Long,
+    val sourceAccountId: Long,
+    val isSip: Boolean = false
 )
 
 /**

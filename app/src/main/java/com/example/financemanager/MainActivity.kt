@@ -52,6 +52,7 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        requestHighRefreshRate()
 
         FinancePreferences.init(this)
         AppLock.init(this)
@@ -195,6 +196,22 @@ class MainActivity : FragmentActivity() {
             window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+    }
+
+    /** Let Android schedule this activity on the smoothest mode the device offers. */
+    private fun requestHighRefreshRate() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+
+        val preferredRate = display?.supportedModes
+            ?.map { it.refreshRate }
+            ?.filter { it >= 120f }
+            ?.maxOrNull()
+            ?: return
+
+        // This is a hint; Android may still lower it for battery or thermal policy.
+        window.attributes = window.attributes.apply {
+            preferredRefreshRate = preferredRate
         }
     }
 

@@ -30,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CalendarToday
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
@@ -39,6 +40,7 @@ import com.example.financemanager.ui.components.iOSButtonVariant
 import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.iOSCardStyle
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -125,6 +127,7 @@ fun QuickEntryScreen(
     var selectedAccountId by remember { mutableStateOf<Long?>(null) }
     var destinationAccountId by remember { mutableStateOf<Long?>(null) }
     var noteInput by remember { mutableStateOf("") }
+    var hashtagInput by remember { mutableStateOf("") }
     var amountText by remember { mutableStateOf("") }
     var showDatePicker by remember { mutableStateOf(false) }
     var selectedDateMillis by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -275,6 +278,21 @@ fun QuickEntryScreen(
             }
 
             item {
+                Text("Quick presets", style = Typography.labelMedium.copy(color = TextSecondary))
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("Coffee" to 150, "Lunch" to 300, "Groceries" to 1000, "Rent" to 10000).forEach { (label, amount) ->
+                        item {
+                            AssistChip(
+                                onClick = { amountText = amount.toString(); viewModel.setAmount(amount.toDouble()); if (noteInput.isBlank()) noteInput = label },
+                                label = { Text("$label ₹$amount") },
+                                leadingIcon = { Icon(Icons.Default.Add, contentDescription = null) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            item {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TransactionType.values().forEach { type ->
                         val selected = selectedType == type
@@ -393,6 +411,25 @@ fun QuickEntryScreen(
                     value = noteInput,
                     onValueChange = { noteInput = it },
                     placeholder = { Text("Note (Optional)", style = TextStyle(color = TextMuted)) },
+                    modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = DarkSurface,
+                        unfocusedContainerColor = DarkSurface,
+                        disabledContainerColor = DarkSurface,
+                        focusedTextColor = TextPrimary,
+                        unfocusedTextColor = TextPrimary,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent
+                    ),
+                    singleLine = true
+                )
+            }
+
+            item {
+                TextField(
+                    value = hashtagInput,
+                    onValueChange = { hashtagInput = it },
+                    placeholder = { Text("Hashtags (e.g. #tax-deductible #vacation-goa)", style = TextStyle(color = TextMuted)) },
                     modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
                     colors = TextFieldDefaults.colors(
                         focusedContainerColor = DarkSurface,
@@ -627,27 +664,27 @@ fun QuickEntryScreen(
                                 Toast.makeText(context, "Split amounts must sum to the total amount.", Toast.LENGTH_SHORT).show()
                                 return@iOSButton
                             }
+                            val taggedNote = listOf(noteInput.ifBlank { nlpTextInput.ifBlank { "Split transaction" } }, hashtagInput.trim()).filter { it.isNotBlank() }.joinToString(" ")
                             viewModel.addSplitTransaction(
                                 totalAmount = amount,
                                 splits = parsedSplits,
                                 accountId = srcAccountId,
-                                note = noteInput.ifBlank { nlpTextInput.ifBlank { "Split transaction" } },
+                                note = taggedNote,
                                 date = selectedDateMillis
                             )
                         } else {
+                            val taggedNote = listOf(noteInput.ifBlank {
+                                if (selectedType == TransactionType.TRANSFER) {
+                                    val destinationName = accounts.firstOrNull { it.id == destinationAccountId }?.name ?: "External transfer"
+                                    "Transfer to $destinationName"
+                                } else nlpTextInput.ifBlank { "Quick transaction" }
+                            }, hashtagInput.trim()).filter { it.isNotBlank() }.joinToString(" ")
                             viewModel.addManualTransaction(
                                 amount = amount,
                                 type = selectedType,
                                 categoryId = if (selectedType == TransactionType.TRANSFER) 0L else (selectedCategoryId ?: 0L),
                                 accountId = srcAccountId,
-                                note = noteInput.ifBlank {
-                                    if (selectedType == TransactionType.TRANSFER) {
-                                        val destinationName = accounts.firstOrNull { it.id == destinationAccountId }?.name ?: "External transfer"
-                                        "Transfer to $destinationName"
-                                    } else {
-                                        nlpTextInput.ifBlank { "Quick transaction" }
-                                    }
-                                },
+                                note = taggedNote,
                                 date = selectedDateMillis,
                                 isRecurring = isRecurring,
                                 recurringInterval = if (isRecurring) recurringInterval else null,

@@ -35,12 +35,17 @@ import com.example.financemanager.data.Category
 import com.example.financemanager.data.SmsTransaction
 import com.example.financemanager.data.Debt
 import com.example.financemanager.data.TransactionType
+import com.example.financemanager.domain.RESOLUTION_REVERSAL
+import com.example.financemanager.domain.RESOLUTION_TRANSFER
+import com.example.financemanager.domain.SmsLink
+import com.example.financemanager.domain.SmsLinkKind
 import com.example.financemanager.theme.*
 import com.example.financemanager.ui.components.iOSButton
 import com.example.financemanager.ui.components.iOSButtonVariant
 import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
+import com.example.financemanager.domain.SmsAmountFormatter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -62,6 +67,7 @@ fun SmsTransactionsScreen(
     onNavigateBack: () -> Unit
 ) {
     val allTxs by viewModel.smsTransactions.collectAsState()
+    val links by viewModel.smsLinks.collectAsState()
     val pendingTxs by viewModel.pendingSmsTransactions.collectAsState()
     val ignoredTxs by viewModel.ignoredSmsTransactions.collectAsState()
     val approvedTxs by viewModel.approvedSmsTransactions.collectAsState()
@@ -71,6 +77,7 @@ fun SmsTransactionsScreen(
     val context = LocalContext.current
 
     var showApproveDialog by remember { mutableStateOf<SmsTransaction?>(null) }
+    var showTransferDialog by remember { mutableStateOf<SmsLink?>(null) }
     var selectedCategoryId by remember { mutableStateOf<Long>(0L) }
     var selectedAccountId by remember { mutableStateOf<Long>(0L) }
     var approveNote by remember { mutableStateOf("") }
@@ -86,11 +93,33 @@ fun SmsTransactionsScreen(
         contract = ActivityResultContracts.OpenDocument(),
         onResult = { uri ->
             if (uri != null) {
-                viewModel.importSmsJson(context, uri)
-                Toast.makeText(context, "Importing SMS data...", Toast.LENGTH_SHORT).show()
+                // Sniff the leading byte rather than trusting the picked mime type or a file
+                // extension SAF doesn't reliably expose: '<' means an SMS Backup & Restore XML
+                // export (full history, auto-approved for anything before the user's first
+                // logged transaction), anything else is treated as the existing JSON format.
+                val looksLikeXml = context.contentResolver.openInputStream(uri)?.use { stream ->
+                    val head = ByteArray(256)
+                    val read = stream.read(head)
+                    read > 0 && String(head, 0, read, Charsets.UTF_8).trimStart().startsWith("<")
+                } ?: false
+
+                if (looksLikeXml) {
+                    viewModel.importSmsXmlHistorical(context, uri)
+                    Toast.makeText(context, "Importing SMS history…", Toast.LENGTH_SHORT).show()
+                } else {
+                    viewModel.importSmsJson(context, uri)
+                    Toast.makeText(context, "Importing SMS data...", Toast.LENGTH_SHORT).show()
+                }
             }
         }
     )
+    val historicalImportResult by viewModel.historicalImportResult.collectAsState()
+    LaunchedEffect(historicalImportResult) {
+        historicalImportResult?.let { message ->
+            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            viewModel.clearHistoricalImportResult()
+        }
+    }
     val smsPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
@@ -115,14 +144,14 @@ fun SmsTransactionsScreen(
                         Text("SMS Transactions", style = Typography.titleLarge.copy(color = TextPrimary))
                         if (pendingTxs.isNotEmpty()) {
                             Spacer(modifier = Modifier.width(8.dp))
-                            Badge(
-                                containerColor = AlertRed,
-                                modifier = Modifier.size(20.dp)
+                            Box(
+                                modifier = Modifier.size(22.dp).clip(CircleShape).background(AlertRed),
+                                contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    "${pendingTxs.size}",
+                                    pendingTxs.size.toString(),
                                     color = Color.White,
-                                    fontSize = 11.sp,
+                                    fontSize = if (pendingTxs.size > 99) 8.sp else 11.sp,
                                     fontWeight = FontWeight.Bold
                                 )
                             }
@@ -137,8 +166,8 @@ fun SmsTransactionsScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { importLauncher.launch(arrayOf("application/json")) }) {
-                        Icon(Icons.Default.FileUpload, contentDescription = "Import JSON", tint = SecondaryTeal)
+                    IconButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/xml", "application/xml")) }) {
+                        Icon(Icons.Default.FileUpload, contentDescription = "Import SMS backup", tint = SecondaryTeal)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
@@ -149,7 +178,7 @@ fun SmsTransactionsScreen(
         if (allTxs.isEmpty()) {
             EmptySmsState(
                 modifier = Modifier.padding(paddingValues),
-                onImport = { importLauncher.launch(arrayOf("application/json")) }
+                onImport = { importLauncher.launch(arrayOf("application/json", "text/xml", "application/xml")) }
             )
         } else {
             LazyColumn(
@@ -215,6 +244,46 @@ fun SmsTransactionsScreen(
                     }
                 }
 
+                // Pairs that cancel out (a self transfer, or money that came back) are resolved
+                // together above the inbox — approving either leg on its own is what double-counts
+                // the money in the first place.
+                if (selectedFilter == SmsFilter.PENDING && links.isNotEmpty()) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.SwapHoriz,
+                                contentDescription = null,
+                                tint = SecondaryTeal,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                "Matched pairs (${links.size})",
+                                style = Typography.titleSmall.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
+                            )
+                        }
+                    }
+                    items(links, key = { it.key }) { link ->
+                        SmsLinkCard(
+                            link = link,
+                            accounts = accounts,
+                            onLogAsTransfer = { showTransferDialog = link },
+                            onCancelOut = {
+                                viewModel.resolveSmsLinkAsReversal(link)
+                                Toast.makeText(
+                                    context,
+                                    "Cancelled out — nothing counted as spending",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            },
+                            onDismiss = { viewModel.dismissSmsLink(link) }
+                        )
+                    }
+                }
+
                 if (visibleTransactions.isEmpty()) {
                     item {
                         iOSCard(modifier = Modifier.fillMaxWidth()) {
@@ -235,6 +304,7 @@ fun SmsTransactionsScreen(
                     items(visibleTransactions, key = { it.id }) { tx ->
                         SmsTransactionCard(
                             tx = tx,
+                            isPartOfPair = links.any { it.debit.id == tx.id || it.credit.id == tx.id },
                             onApprove = {
                                 // Reuse how this merchant was filed last time; fall back to the
                                 // account matching the bank and the first envelope otherwise.
@@ -262,6 +332,19 @@ fun SmsTransactionsScreen(
         }
     }
 
+    showTransferDialog?.let { link ->
+        LogTransferDialog(
+            link = link,
+            accounts = accounts,
+            onConfirm = { fromId, toId, note ->
+                viewModel.resolveSmsLinkAsTransfer(link, fromId, toId, note)
+                showTransferDialog = null
+                Toast.makeText(context, "Logged as one transfer", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showTransferDialog = null }
+        )
+    }
+
     showApproveDialog?.let { tx ->
         ApproveSmsDialog(
             tx = tx,
@@ -285,13 +368,11 @@ fun SmsTransactionsScreen(
                 }
             },
             onConfirmDebt = { debt, paymentAmount ->
-                if (selectedAccountId > 0) {
-                    val account = accounts.find { it.id == selectedAccountId }
-                    if (account != null) {
-                        viewModel.approveSmsAsDebtPayment(tx, debt, paymentAmount, account)
-                        showApproveDialog = null
-                        Toast.makeText(context, "IOU settlement approved!", Toast.LENGTH_SHORT).show()
-                    }
+                val account = accounts.find { it.id == selectedAccountId } ?: accounts.firstOrNull()
+                if (account != null) {
+                    viewModel.approveSmsAsDebtPayment(tx, debt, paymentAmount, account)
+                    showApproveDialog = null
+                    Toast.makeText(context, "IOU settlement approved!", Toast.LENGTH_SHORT).show()
                 } else {
                     Toast.makeText(context, "Please select an account", Toast.LENGTH_SHORT).show()
                 }
@@ -340,7 +421,7 @@ private fun EmptySmsState(
             ) {
                 Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Import JSON", fontWeight = FontWeight.SemiBold)
+                Text("Import SMS Backup", fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -411,6 +492,7 @@ private fun SummaryChip(
 @Composable
 private fun SmsTransactionCard(
     tx: SmsTransaction,
+    isPartOfPair: Boolean = false,
     onApprove: () -> Unit,
     onIgnore: () -> Unit,
     onRestore: () -> Unit,
@@ -426,11 +508,14 @@ private fun SmsTransactionCard(
         else -> WarningAmber
     }
     val statusLabel = when {
+        tx.resolution == RESOLUTION_TRANSFER -> "Self transfer"
+        tx.resolution == RESOLUTION_REVERSAL -> "Cancelled out"
         tx.isApproved -> "Approved"
         tx.isIgnored -> "Ignored"
         else -> "Pending"
     }
     val statusColor = when {
+        tx.resolution.isNotEmpty() -> SecondaryTeal
         tx.isApproved -> AccentGreen
         tx.isIgnored -> TextSecondary
         else -> WarningAmber
@@ -467,7 +552,7 @@ private fun SmsTransactionCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            tx.amount.ifEmpty { "N/A" },
+                            SmsAmountFormatter.display(tx.amount),
                             style = Typography.titleMedium.copy(
                                 fontWeight = FontWeight.Bold,
                                 color = if (isCredit) AccentGreen else if (isDebit) AlertRed else TextPrimary
@@ -537,6 +622,26 @@ private fun SmsTransactionCard(
                             )
                         }
                     }
+                }
+            }
+
+            if (isPartOfPair) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        Icons.Default.SwapHoriz,
+                        contentDescription = null,
+                        tint = SecondaryTeal,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        "Matched with another alert — resolve it in Matched pairs above",
+                        style = Typography.labelSmall.copy(color = SecondaryTeal, fontSize = 11.sp)
+                    )
                 }
             }
 
@@ -766,12 +871,18 @@ private fun ApproveSmsDialog(
     var categoryExpanded by remember { mutableStateOf(false) }
     var debtExpanded by remember { mutableStateOf(false) }
 
-    val parsedAmountStr = tx.amount.replace("Rs.", "").replace(",", "").trim()
+    val activeDebts = debts.filter { !it.isSettled }
+    val parsedAmountStr = SmsAmountFormatter.number(tx.amount)
     var settleAmountStr by remember { mutableStateOf(parsedAmountStr) }
-    var selectedDebtId by remember { mutableStateOf<Long>(0L) }
+    var selectedDebtId by remember { mutableStateOf<Long>(activeDebts.firstOrNull()?.id ?: 0L) }
     var currentTxType by remember { mutableStateOf(if (tx.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE) }
 
-    val activeDebts = debts.filter { !it.isSettled }
+    LaunchedEffect(activeDebts) {
+        if (selectedDebtId == 0L && activeDebts.isNotEmpty()) {
+            selectedDebtId = activeDebts.first().id
+        }
+    }
+
     val fieldColors = approveFieldColors()
     val directionColor = if (currentTxType == TransactionType.INCOME) AccentGreen else AlertRed
     val bankInitial = tx.accountName.firstOrNull()?.uppercaseChar() ?: '?'
@@ -842,7 +953,7 @@ private fun ApproveSmsDialog(
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
-                                        tx.amount,
+                                        SmsAmountFormatter.display(tx.amount),
                                         style = Typography.headlineSmall.copy(fontWeight = FontWeight.Bold, color = directionColor)
                                     )
                                     if (tx.counterparty.isNotEmpty()) {
@@ -1064,14 +1175,26 @@ private fun ApproveSmsDialog(
                 }
 
                 item {
+                    val context = androidx.compose.ui.platform.LocalContext.current
                     Column {
                         iOSButton(
                             onClick = {
                                 if (isSettleIou) {
-                                    val debt = activeDebts.find { it.id == selectedDebtId }
-                                    val amount = settleAmountStr.toDoubleOrNull() ?: 0.0
-                                    if (debt != null && amount > 0) {
-                                        onConfirmDebt(debt, amount)
+                                    val debt = activeDebts.find { it.id == selectedDebtId } ?: activeDebts.firstOrNull()
+                                    val cleanAmt = SmsAmountFormatter.number(settleAmountStr).toDoubleOrNull() ?: 0.0
+                                    when {
+                                        activeDebts.isEmpty() -> {
+                                            android.widget.Toast.makeText(context, "No active IOUs to settle", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                        debt == null -> {
+                                            android.widget.Toast.makeText(context, "Please select an IOU debt to settle", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                        cleanAmt <= 0.0 -> {
+                                            android.widget.Toast.makeText(context, "Please enter a valid settlement amount", android.widget.Toast.LENGTH_SHORT).show()
+                                        }
+                                        else -> {
+                                            onConfirmDebt(debt, cleanAmt)
+                                        }
                                     }
                                 } else {
                                     onConfirmStandard(currentTxType)
@@ -1095,6 +1218,333 @@ private fun ApproveSmsDialog(
                 }
             }
         }
+    }
+}
+
+/**
+ * One debit alert and the credit alert that cancels it, resolved as a pair.
+ *
+ * Both legs are shown in full because the decision is the user's: only they know whether two
+ * equal amounts minutes apart were their own money moving between accounts, an IPO refund, or a
+ * coincidence.
+ */
+@Composable
+private fun SmsLinkCard(
+    link: SmsLink,
+    accounts: List<Account>,
+    onLogAsTransfer: () -> Unit,
+    onCancelOut: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isReversal = link.kind == SmsLinkKind.REVERSAL
+    val accent = if (isReversal) WarningAmber else SecondaryTeal
+    val title = if (isReversal) "Money came back" else "Looks like a self transfer"
+    val subtitle = if (isReversal) {
+        "Debited and credited on the same account — a refund, a failed payment, or an IPO block released."
+    } else {
+        "The same amount left one account and landed in another."
+    }
+    val evidence = when {
+        link.sharedReference -> "Same reference ${link.debit.reference}"
+        link.statedReversal -> "The credit says it was reversed"
+        else -> "${formatGap(link.gapMillis)} apart"
+    }
+    // Only worth warning about when there is something to undo.
+    val alreadyLogged = link.debit.isApproved || link.credit.isApproved
+
+    iOSCard(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(accent.copy(alpha = 0.15f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        if (isReversal) Icons.Default.Undo else Icons.Default.SwapHoriz,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.width(12.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(title, style = Typography.titleSmall.copy(color = TextPrimary, fontWeight = FontWeight.Bold))
+                    Text(
+                        evidence,
+                        style = Typography.labelSmall.copy(color = accent, fontSize = 11.sp)
+                    )
+                }
+                Text(
+                    moneyString(link.amount),
+                    style = Typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            Text(subtitle, style = Typography.bodySmall.copy(color = TextSecondary, lineHeight = 17.sp))
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Surface(color = DeepBackground, shape = RoundedCornerShape(12.dp)) {
+                Column(modifier = Modifier.fillMaxWidth().padding(10.dp)) {
+                    SmsLinkLeg(
+                        label = "Debited",
+                        color = AlertRed,
+                        sms = link.debit
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SmsLinkLeg(
+                        label = "Credited",
+                        color = AccentGreen,
+                        sms = link.credit
+                    )
+                }
+            }
+
+            if (alreadyLogged) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "One leg is already logged — resolving this removes it, so it stops counting " +
+                        "toward your spending.",
+                    style = Typography.labelSmall.copy(color = WarningAmber, fontSize = 11.sp, lineHeight = 15.sp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            iOSButton(
+                onClick = if (isReversal) onCancelOut else onLogAsTransfer,
+                modifier = Modifier.fillMaxWidth(),
+                variant = iOSButtonVariant.Accent,
+                accentColor = accent
+            ) {
+                Icon(
+                    if (isReversal) Icons.Default.Undo else Icons.Default.SwapHoriz,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    if (isReversal) "Cancel both out" else "Log as one transfer",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = if (isReversal) onLogAsTransfer else onCancelOut,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                    border = BorderStroke(1.dp, BorderColor),
+                    enabled = !isReversal || accounts.size > 1
+                ) {
+                    Text(
+                        if (isReversal) "It was a transfer" else "It came back",
+                        fontSize = 12.sp
+                    )
+                }
+                OutlinedButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = TextSecondary),
+                    border = BorderStroke(1.dp, BorderColor)
+                ) {
+                    Text("Not related", fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SmsLinkLeg(
+    label: String,
+    color: Color,
+    sms: SmsTransaction
+) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Surface(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(6.dp)) {
+            Text(
+                label,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                style = Typography.labelSmall.copy(color = color, fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
+            )
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                sms.accountName.ifEmpty { sms.sender },
+                style = Typography.bodySmall.copy(color = TextPrimary),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                listOf(sms.counterparty, formatSmsTimestamp(sms.rawTimestamp))
+                    .filter { it.isNotBlank() }
+                    .joinToString(" · "),
+                style = Typography.labelSmall.copy(color = TextSecondary, fontSize = 11.sp),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** Picks the two accounts a matched pair moved money between, then logs it as one transfer. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LogTransferDialog(
+    link: SmsLink,
+    accounts: List<Account>,
+    onConfirm: (Long, Long, String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var fromAccountId by remember { mutableStateOf(getDefaultAccountId(accounts, link.debit.accountName)) }
+    var toAccountId by remember {
+        mutableStateOf(
+            accounts.firstOrNull {
+                link.credit.accountName.isNotBlank() && it.name.contains(link.credit.accountName, ignoreCase = true)
+            }?.id ?: accounts.firstOrNull { it.id != fromAccountId }?.id ?: 0L
+        )
+    }
+    var note by remember { mutableStateOf("") }
+    var fromExpanded by remember { mutableStateOf(false) }
+    var toExpanded by remember { mutableStateOf(false) }
+
+    val fieldColors = approveFieldColors()
+    val isValid = fromAccountId > 0 && toAccountId > 0 && fromAccountId != toAccountId
+
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+            color = DarkSurface
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Column {
+                    Text(
+                        "Log as transfer",
+                        style = Typography.titleLarge.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
+                    )
+                    Text(
+                        "${moneyString(link.amount)} moved between your own accounts. It won't count " +
+                            "as spending or income.",
+                        style = Typography.bodySmall.copy(color = TextSecondary, lineHeight = 17.sp)
+                    )
+                }
+
+                ExposedDropdownMenuBox(
+                    expanded = fromExpanded,
+                    onExpandedChange = { fromExpanded = !fromExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = accounts.find { it.id == fromAccountId }?.name ?: "Select account",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("From (debited)") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = fromExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = fieldColors
+                    )
+                    ExposedDropdownMenu(expanded = fromExpanded, onDismissRequest = { fromExpanded = false }) {
+                        accounts.forEach { account ->
+                            DropdownMenuItem(
+                                text = { Text(account.name) },
+                                onClick = {
+                                    fromAccountId = account.id
+                                    fromExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                ExposedDropdownMenuBox(
+                    expanded = toExpanded,
+                    onExpandedChange = { toExpanded = !toExpanded }
+                ) {
+                    OutlinedTextField(
+                        value = accounts.find { it.id == toAccountId }?.name ?: "Select account",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("To (credited)") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = toExpanded) },
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = fieldColors
+                    )
+                    ExposedDropdownMenu(expanded = toExpanded, onDismissRequest = { toExpanded = false }) {
+                        accounts.filter { it.id != fromAccountId }.forEach { account ->
+                            DropdownMenuItem(
+                                text = { Text(account.name) },
+                                onClick = {
+                                    toAccountId = account.id
+                                    toExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+
+                OutlinedTextField(
+                    value = note,
+                    onValueChange = { note = it },
+                    label = { Text("Note (optional)") },
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    maxLines = 2,
+                    colors = fieldColors
+                )
+
+                if (!isValid) {
+                    Text(
+                        "Pick two different accounts.",
+                        style = Typography.labelSmall.copy(color = WarningAmber)
+                    )
+                }
+
+                Column {
+                    iOSButton(
+                        onClick = { if (isValid) onConfirm(fromAccountId, toAccountId, note) },
+                        modifier = Modifier.fillMaxWidth(),
+                        variant = iOSButtonVariant.Accent,
+                        accentColor = SecondaryTeal
+                    ) {
+                        Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Log transfer", fontWeight = FontWeight.SemiBold)
+                    }
+                    TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                        Text("Cancel", color = TextSecondary)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** "4 min", "3 hr", "6 days" — how far apart the two alerts were. */
+private fun formatGap(millis: Long): String {
+    val minutes = millis / 60000
+    return when {
+        minutes < 1 -> "Seconds"
+        minutes < 60 -> "$minutes min"
+        minutes < 60 * 24 -> "${minutes / 60} hr"
+        else -> "${minutes / (60 * 24)} days"
     }
 }
 

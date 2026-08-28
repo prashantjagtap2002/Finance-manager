@@ -331,7 +331,9 @@ object SmsParser {
             "is due|due on|due date|total due|payment due|min(?:imum)? (?:amt|amount) due|" +
             "has requested|is requesting|collect request|payment request|" +
             "failed|declined|unsuccessful|insufficient|could not be processed|" +
-            "click here|apply now|pre-approved|you are eligible)\\b",
+            "click here|apply now|pre-approved|pre-qualified|you are eligible|" +
+            "welcome bonus|bonus (?:can be|is ready to be) credited|prize pool|" +
+            "brokerage|free cash|gift card|added (?:to|in) your (?:\\w+\\s+){0,3}wallet)\\b",
         RegexOption.IGNORE_CASE
     )
 

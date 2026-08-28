@@ -10,8 +10,8 @@ import androidx.sqlite.db.SupportSQLiteDatabase;
 import androidx.room.migration.Migration;
 
 @Database(
-    entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class, MerchantRule.class},
-    version = 14,
+    entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class, MerchantRule.class, Investment.class, InvestmentTransaction.class, ExpenseGroup.class, ExpenseGroupMember.class, ExpenseGroupExpense.class},
+    version = 17,
     exportSchema = false
 )
 @TypeConverters({Converters.class})
@@ -175,6 +175,72 @@ public abstract class FinanceDatabase extends RoomDatabase {
         }
     };
 
+    // Lets a captured SMS remember what it became. A self transfer and an IPO refund each arrive
+    // as two alerts that cancel out, and resolving them means undoing the leg that was already
+    // logged — which needs the transaction id, not a guess based on amount and date.
+    static final Migration MIGRATION_14_15 = new Migration(14, 15) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL("ALTER TABLE sms_transactions ADD COLUMN loggedTransactionId INTEGER NOT NULL DEFAULT 0");
+            database.execSQL("ALTER TABLE sms_transactions ADD COLUMN linkedSmsId INTEGER NOT NULL DEFAULT 0");
+            database.execSQL("ALTER TABLE sms_transactions ADD COLUMN resolution TEXT NOT NULL DEFAULT ''");
+        }
+    };
+
+    // Adds stock/mutual-fund holding tracking: one row per holding (Investment) and one row per
+    // buy/sell/SIP installment against it (InvestmentTransaction), mirroring how
+    // accounts/transactions are split.
+    static final Migration MIGRATION_15_16 = new Migration(15, 16) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "CREATE TABLE IF NOT EXISTS `investments` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`name` TEXT NOT NULL, " +
+                "`symbol` TEXT, " +
+                "`exchange` TEXT, " +
+                "`type` TEXT NOT NULL, " +
+                "`currentPrice` REAL NOT NULL DEFAULT 0, " +
+                "`lastPriceUpdate` INTEGER NOT NULL DEFAULT 0, " +
+                "`currency` TEXT NOT NULL DEFAULT 'INR', " +
+                "`notes` TEXT NOT NULL DEFAULT '')"
+            );
+            database.execSQL(
+                "CREATE TABLE IF NOT EXISTS `investment_transactions` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`investmentId` INTEGER NOT NULL, " +
+                "`type` TEXT NOT NULL, " +
+                "`quantity` REAL NOT NULL, " +
+                "`pricePerUnit` REAL NOT NULL, " +
+                "`amount` REAL NOT NULL, " +
+                "`date` INTEGER NOT NULL, " +
+                "`sourceAccountId` INTEGER NOT NULL, " +
+                "`isSip` INTEGER NOT NULL DEFAULT 0)"
+            );
+        }
+    };
+
+    static final Migration MIGRATION_16_17 = new Migration(16, 17) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL("CREATE TABLE IF NOT EXISTS `expense_groups` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`name` TEXT NOT NULL, `currency` TEXT NOT NULL DEFAULT 'INR', " +
+                "`createdAt` INTEGER NOT NULL)");
+            database.execSQL("CREATE TABLE IF NOT EXISTS `expense_group_members` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`groupId` INTEGER NOT NULL, `name` TEXT NOT NULL, " +
+                "`upiId` TEXT NOT NULL DEFAULT '', `isCurrentUser` INTEGER NOT NULL DEFAULT 0)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_expense_group_members_groupId` ON `expense_group_members` (`groupId`)");
+            database.execSQL("CREATE TABLE IF NOT EXISTS `expense_group_expenses` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`groupId` INTEGER NOT NULL, `description` TEXT NOT NULL, " +
+                "`amount` REAL NOT NULL, `paidByMemberId` INTEGER NOT NULL, " +
+                "`participantMemberIds` TEXT NOT NULL, `date` INTEGER NOT NULL)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_expense_group_expenses_groupId` ON `expense_group_expenses` (`groupId`)");
+        }
+    };
+
     public static FinanceDatabase getDatabase(final Context context, final kotlinx.coroutines.CoroutineScope scope) {
         if (INSTANCE == null) {
             synchronized (FinanceDatabase.class) {
@@ -184,7 +250,7 @@ public abstract class FinanceDatabase extends RoomDatabase {
                         FinanceDatabase.class,
                         "finance_database"
                     )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
                     .addCallback(new RoomDatabase.Callback() {
                         @Override
                         public void onCreate(@NonNull SupportSQLiteDatabase db) {

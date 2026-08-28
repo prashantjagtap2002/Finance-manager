@@ -11,6 +11,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.EmojiEvents
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Category
@@ -56,19 +57,18 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.example.financemanager.data.TransactionType
 import com.example.financemanager.theme.*
 import com.example.financemanager.theme.Typography
 import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.iOSCardStyle
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
+import kotlin.time.Duration.Companion.milliseconds
+import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -184,6 +184,7 @@ fun InsightsScreen(
     viewModel: FinanceViewModel,
     onNavigateBack: () -> Unit,
     onNavigateToCategory: (Long, String, String) -> Unit,
+    onNavigateToCustomInsight: () -> Unit = {},
     showBackButton: Boolean = true
 ) {
     val context = LocalContext.current
@@ -355,7 +356,7 @@ fun InsightsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Reports & Insights", style = com.example.financemanager.theme.Typography.titleLarge.copy(color = TextPrimary)) },
+                title = { Text("Reports & Insights", style = Typography.titleLarge.copy(color = TextPrimary)) },
                 navigationIcon = {
                     if (showBackButton) {
                         IconButton(onClick = onNavigateBack) {
@@ -364,6 +365,9 @@ fun InsightsScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onNavigateToCustomInsight) {
+                        Icon(Icons.Default.Add, contentDescription = "Create custom insight", tint = PrimaryViolet)
+                    }
                     // Export CSV
                     IconButton(onClick = {
                         val path = viewModel.exportTransactionsToCsv(context)
@@ -394,9 +398,8 @@ fun InsightsScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                DynamicDateFilter.values().forEach { filter ->
+                DynamicDateFilter.entries.forEach { filter ->
                     val isSelected = currentFilterType == filter
-                    val isDark = LocalThemeIsDark.current
                     val bgColor by animateColorAsState(
                         targetValue = if (isSelected) PrimaryViolet else SubtleSurface,
                         animationSpec = spring(
@@ -431,7 +434,7 @@ fun InsightsScreen(
                         Text(
                             text = filter.label,
                             color = textColor,
-                            style = com.example.financemanager.theme.Typography.labelMedium
+                            style = Typography.labelMedium
                         )
                     }
                 }
@@ -477,7 +480,7 @@ fun InsightsScreen(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text(
                                     text = dateText,
-                                    style = com.example.financemanager.theme.Typography.titleSmall.copy(color = TextSecondary)
+                                    style = Typography.titleSmall.copy(color = TextSecondary)
                                 )
                                 Spacer(modifier = Modifier.width(4.dp))
                                 IconButton(
@@ -501,7 +504,7 @@ fun InsightsScreen(
                             } else {
                                 Text(
                                     text = dateText,
-                                    style = com.example.financemanager.theme.Typography.titleSmall.copy(color = TextSecondary)
+                                    style = Typography.titleSmall.copy(color = TextSecondary)
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 IconButton(
@@ -521,7 +524,7 @@ fun InsightsScreen(
                         if (selectedDayTimestamp != null) {
                             Text(
                                 text = "Show full period",
-                                style = com.example.financemanager.theme.Typography.labelSmall.copy(color = SecondaryTeal, fontWeight = FontWeight.Bold),
+                                style = Typography.labelSmall.copy(color = SecondaryTeal, fontWeight = FontWeight.Bold),
                                 modifier = Modifier.clickable {
                                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                     selectedDayTimestamp = null
@@ -568,7 +571,7 @@ fun InsightsScreen(
                         ) {
                             Text(
                                 "Daily Spending Trend",
-                                style = com.example.financemanager.theme.Typography.titleMedium.copy(color = TextPrimary)
+                                style = Typography.titleMedium.copy(color = TextPrimary)
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             DailyExpenseBarChart(
@@ -613,7 +616,7 @@ fun InsightsScreen(
                         ) {
                             Text(
                                 "Expense Category Breakdown",
-                                style = com.example.financemanager.theme.Typography.titleMedium.copy(color = TextPrimary),
+                                style = Typography.titleMedium.copy(color = TextPrimary),
                                 modifier = Modifier.align(Alignment.Start)
                             )
                             Spacer(modifier = Modifier.height(16.dp))
@@ -625,7 +628,7 @@ fun InsightsScreen(
                                         .fillMaxWidth(),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Text("No expense logs found for the selected period.", style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextMuted))
+                                    Text("No expense logs found for the selected period.", style = Typography.bodyMedium.copy(color = TextMuted))
                                 }
                             } else {
                                 Row(
@@ -665,7 +668,7 @@ fun InsightsScreen(
                                                 Column {
                                                     Text(
                                                         item.name,
-                                                        style = com.example.financemanager.theme.Typography.labelMedium.copy(color = TextPrimary),
+                                                        style = Typography.labelMedium.copy(color = TextPrimary),
                                                         maxLines = 1
                                                     )
                                                     Text(
@@ -730,14 +733,14 @@ fun InsightsScreen(
                                     tint = PrimaryViolet,
                                     modifier = Modifier.size(20.dp)
                                 )
-                                Text("Key Insights", style = com.example.financemanager.theme.Typography.titleMedium.copy(color = TextPrimary))
+                                Text("Key Insights", style = Typography.titleMedium.copy(color = TextPrimary))
                             }
                             Spacer(modifier = Modifier.height(14.dp))
 
                             if (filteredExpenses.isEmpty()) {
                                 Text(
                                     "No expenses in the selected period yet.",
-                                    style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextMuted)
+                                    style = Typography.bodyMedium.copy(color = TextMuted)
                                 )
                             } else {
                                 InsightRow(
@@ -781,11 +784,11 @@ fun InsightsScreen(
                                     tint = WarningAmber,
                                     modifier = Modifier.size(20.dp)
                                 )
-                                Text("Achievements", style = com.example.financemanager.theme.Typography.titleMedium.copy(color = TextPrimary))
+                                Text("Achievements", style = Typography.titleMedium.copy(color = TextPrimary))
                                 Spacer(modifier = Modifier.weight(1f))
                                 Text(
                                     "${achievements.count { it.unlocked }}/${achievements.size}",
-                                    style = com.example.financemanager.theme.Typography.labelLarge.copy(color = TextSecondary)
+                                    style = Typography.labelLarge.copy(color = TextSecondary)
                                 )
                             }
                             Spacer(modifier = Modifier.height(10.dp))
@@ -797,7 +800,7 @@ fun InsightsScreen(
                                     .clip(RoundedCornerShape(3.dp)),
                                 color = WarningAmber,
                                 trackColor = BorderColor.copy(alpha = 0.4f),
-                                strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                                strokeCap = StrokeCap.Round
                             )
                             Spacer(modifier = Modifier.height(14.dp))
                             achievements.forEach { achievement ->
@@ -826,14 +829,14 @@ fun InsightsScreen(
                                     Column {
                                         Text(
                                             achievement.title,
-                                            style = com.example.financemanager.theme.Typography.titleSmall.copy(
+                                            style = Typography.titleSmall.copy(
                                                 color = if (achievement.unlocked) TextPrimary else TextMuted,
                                                 fontWeight = FontWeight.SemiBold
                                             )
                                         )
                                         Text(
                                             achievement.description,
-                                            style = com.example.financemanager.theme.Typography.labelMedium.copy(color = TextMuted)
+                                            style = Typography.labelMedium.copy(color = TextMuted)
                                         )
                                     }
                                 }
@@ -859,33 +862,33 @@ fun InsightsScreen(
                                     tint = AccentGreen,
                                     modifier = Modifier.size(20.dp)
                                 )
-                                Text("Cash Flow Forecast", style = com.example.financemanager.theme.Typography.titleMedium.copy(color = TextPrimary))
+                                Text("Cash Flow Forecast", style = Typography.titleMedium.copy(color = TextPrimary))
                             }
                             Spacer(modifier = Modifier.height(14.dp))
                             if (periodIsInFuture) {
                                 Text(
                                     "Based on your current balance of ${moneyString(currentBalance)} and your spending pace this period, you're projected to have:",
-                                    style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextSecondary)
+                                    style = Typography.bodyMedium.copy(color = TextSecondary)
                                 )
                                 Spacer(modifier = Modifier.height(14.dp))
                                 Text(
                                     moneyString(forecastEndBalance),
-                                    style = com.example.financemanager.theme.Typography.headlineMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold)
+                                    style = Typography.headlineMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold)
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     "by ${SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(rangeEnd))}",
-                                    style = com.example.financemanager.theme.Typography.labelMedium.copy(color = TextMuted)
+                                    style = Typography.labelMedium.copy(color = TextMuted)
                                 )
                             } else {
                                 Text(
                                     "Current balance across all accounts:",
-                                    style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextSecondary)
+                                    style = Typography.bodyMedium.copy(color = TextSecondary)
                                 )
                                 Spacer(modifier = Modifier.height(14.dp))
                                 Text(
                                     moneyString(currentBalance),
-                                    style = com.example.financemanager.theme.Typography.headlineMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold)
+                                    style = Typography.headlineMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold)
                                 )
                             }
                         }
@@ -942,7 +945,7 @@ fun DonutChart(
     var isVisible by remember { mutableStateOf(false) }
     LaunchedEffect(categoryBreakdown) {
         isVisible = false
-        kotlinx.coroutines.delay(50)
+        delay(50.milliseconds)
         isVisible = true
     }
 
@@ -972,7 +975,7 @@ fun DonutChart(
         
         Text(
             text = moneyString(totalExpense),
-            style = com.example.financemanager.theme.Typography.titleSmall.copy(
+            style = Typography.titleSmall.copy(
                 fontWeight = FontWeight.Bold,
                 color = TextPrimary
             ),
@@ -1005,7 +1008,7 @@ private fun InsightRow(
         }
         Text(
             text,
-            style = com.example.financemanager.theme.Typography.bodyMedium.copy(color = TextPrimary),
+            style = Typography.bodyMedium.copy(color = TextPrimary),
             modifier = Modifier.weight(1f)
         )
     }
@@ -1087,11 +1090,14 @@ fun DailyExpenseBarChart(
 
     val maxAmount = dayBuckets.maxOfOrNull { it.amount } ?: 1.0
     val maxScaled = if (maxAmount == 0.0) 1.0 else maxAmount
+    val totalAmount = dayBuckets.sumOf { it.amount }
+    val averageAmount = totalAmount / dayBuckets.size.coerceAtLeast(1)
+    val peakDay = dayBuckets.maxByOrNull { it.amount }
 
     var isVisible by remember { mutableStateOf(false) }
     LaunchedEffect(dayBuckets) {
         isVisible = false
-        kotlinx.coroutines.delay(50)
+        delay(50.milliseconds)
         isVisible = true
     }
 
@@ -1104,6 +1110,15 @@ fun DailyExpenseBarChart(
     val selectedBucket = dayBuckets.firstOrNull { it.timestamp == selectedDayTimestamp }
 
     Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            TrendMetric("Total", moneyString(totalAmount), Modifier.weight(1f))
+            TrendMetric("Avg/day", moneyString(averageAmount), Modifier.weight(1f))
+            TrendMetric("Peak", peakDay?.label ?: "-", Modifier.weight(1f))
+        }
+
         // Selected day indicator (clean typography, no green box)
         if (selectedBucket != null) {
             Row(
@@ -1169,8 +1184,8 @@ fun DailyExpenseBarChart(
                 val showLabel = when {
                     isSelected -> true
                     totalDays <= 14 -> true
-                    totalDays <= 31 -> (index % 5 == 0 || index == 0 || index == totalDays - 1)
-                    else -> (index % 10 == 0 || index == 0 || index == totalDays - 1)
+                    totalDays <= 31 -> (index % 5 == 0 || index == totalDays - 1)
+                    else -> (index % 10 == 0 || index == totalDays - 1)
                 }
 
                 val itemModifier = if (isScrollable) {
@@ -1228,6 +1243,25 @@ fun DailyExpenseBarChart(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun TrendMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier,
+        color = SubtleSurface,
+        shape = RoundedCornerShape(10.dp)
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+            Text(label, style = Typography.labelSmall.copy(color = TextSecondary))
+            Text(
+                value,
+                style = Typography.labelMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
@@ -1293,7 +1327,7 @@ private fun buildBalanceSeries(
 
 /**
  * Straight-line (polyline) graph with two series: the running total across all accounts
- * (rising and falling segments colour-coded, so it reads as "when did my money go up/down")
+ * (rising and falling segments color-coded, so it reads as "when did my money go up/down")
  * and the per-day spend. Tap any point to pin it and read the exact amount and change;
  * the line draws itself left-to-right whenever the data, mode, or period changes.
  */
@@ -1343,7 +1377,7 @@ fun DailyAmountLineChart(
     LaunchedEffect(dayBuckets) {
         isVisible = false
         selectedIndex = -1
-        kotlinx.coroutines.delay(50)
+        delay(50.milliseconds)
         isVisible = true
     }
     val sweep by animateFloatAsState(
@@ -1408,7 +1442,7 @@ fun DailyAmountLineChart(
 
         // Series switch
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            LineSeriesMode.values().forEach { seriesMode ->
+            LineSeriesMode.entries.forEach { seriesMode ->
                 val isActive = mode == seriesMode
                 Box(
                     modifier = Modifier
@@ -1504,7 +1538,7 @@ fun DailyAmountLineChart(
             ) {
                 val baseline = topPad + plotH
 
-                // Horizontal guide lines
+                // Horizontal guidelines
                 for (i in 0..2) {
                     val y = topPad + plotH * i / 2f
                     drawLine(
@@ -1554,7 +1588,7 @@ fun DailyAmountLineChart(
 
                 val strokePx = 2.5f.dp.toPx()
                 if (isBalanceMode) {
-                    // Colour each straight segment by direction: green where the total rose, red where it fell
+                    // Color each straight segment by direction: green where the total rose, red where it fell
                     for (i in 1..fullSegments) {
                         drawLine(
                             color = if (points[i].y <= points[i - 1].y) upColor else downColor,
@@ -1711,16 +1745,16 @@ fun DailyAmountLineChart(
             }
         }
 
-        // X axis: first / middle / last day labels
+        // X-axis: first / middle / last day labels
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            val labels = when {
-                dayBuckets.size == 1 -> listOf(dayBuckets.first().label)
-                dayBuckets.size == 2 -> listOf(dayBuckets.first().label, dayBuckets.last().label)
+            val labels = when (dayBuckets.size) {
+                1 -> listOf(dayBuckets.first().label)
+                2 -> listOf(dayBuckets.first().label, dayBuckets.last().label)
                 else -> listOf(
                     dayBuckets.first().label,
                     dayBuckets[dayBuckets.size / 2].label,
@@ -1740,36 +1774,32 @@ fun DailyAmountLineChart(
         if (isBalanceMode) {
             Spacer(modifier = Modifier.height(6.dp))
 
-            val peakIdx = peakIndex
-            if (peakIdx != null) {
+            if (peakIndex != null) {
                 MovementRow(
                     icon = Icons.Default.ArrowUpward,
                     tint = upColor,
-                    text = "Highest total ${moneyString(dayBuckets[peakIdx].amount)} on ${dayBuckets[peakIdx].fullDateStr}"
+                    text = "Highest total ${moneyString(dayBuckets[peakIndex].amount)} on ${dayBuckets[peakIndex].fullDateStr}"
                 )
             }
-            val lowIdx = lowIndex
-            if (lowIdx != null && lowIdx != peakIdx) {
+            if (lowIndex != null && lowIndex != peakIndex) {
                 MovementRow(
                     icon = Icons.Default.ArrowDownward,
                     tint = downColor,
-                    text = "Lowest total ${moneyString(dayBuckets[lowIdx].amount)} on ${dayBuckets[lowIdx].fullDateStr}"
+                    text = "Lowest total ${moneyString(dayBuckets[lowIndex].amount)} on ${dayBuckets[lowIndex].fullDateStr}"
                 )
             }
-            val riseIdx = biggestRiseIndex
-            if (riseIdx != null) {
+            if (biggestRiseIndex != null) {
                 MovementRow(
                     icon = Icons.AutoMirrored.Filled.TrendingUp,
                     tint = upColor,
-                    text = "Biggest rise ${signedMoney(deltas[riseIdx])} on ${dayBuckets[riseIdx].fullDateStr}"
+                    text = "Biggest rise ${signedMoney(deltas[biggestRiseIndex])} on ${dayBuckets[biggestRiseIndex].fullDateStr}"
                 )
             }
-            val dropIdx = biggestDropIndex
-            if (dropIdx != null) {
+            if (biggestDropIndex != null) {
                 MovementRow(
                     icon = Icons.AutoMirrored.Filled.TrendingDown,
                     tint = downColor,
-                    text = "Biggest drop ${signedMoney(deltas[dropIdx])} on ${dayBuckets[dropIdx].fullDateStr}"
+                    text = "Biggest drop ${signedMoney(deltas[biggestDropIndex])} on ${dayBuckets[biggestDropIndex].fullDateStr}"
                 )
             }
             MovementRow(

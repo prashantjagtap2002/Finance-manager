@@ -66,6 +66,7 @@ data class TransactionDto(
     @SerialName("merchantname") val merchantName: String? = null,
     @SerialName("originalamount") val originalAmount: Double? = null,
     @SerialName("originalcurrency") val originalCurrency: String? = null,
+    @SerialName("isverified") val isVerified: Boolean = true,
     @SerialName("user_id") val userId: String
 ) {
     fun toEntity() = Transaction(
@@ -84,7 +85,8 @@ data class TransactionDto(
         isAutoLogged = isAutoLogged,
         merchantName = merchantName,
         originalAmount = originalAmount,
-        originalCurrency = originalCurrency
+        originalCurrency = originalCurrency,
+        isVerified = isVerified
     )
 }
 
@@ -211,4 +213,3 @@ data class SmsTransactionDto(
         approvedAccountId = approvedAccountId
     )
 }
-

@@ -27,6 +27,18 @@ class RecurringTransactionWorker(
             // Get all recurring transactions
             val recurringList = dao.getRecurringTransactionsList()
             val now = System.currentTimeMillis()
+
+            val upcoming = recurringList.filter {
+                !it.isPaused && !it.isAutoLog && it.nextExecutionDate in now..(now + 2 * 24 * 60 * 60 * 1000L)
+            }
+            if (upcoming.isNotEmpty()) {
+                NotificationHelper.notifyUpcomingBills(
+                    applicationContext,
+                    upcoming.size,
+                    upcoming.sumOf { it.amount },
+                    upcoming.first().note.ifBlank { "Recurring payment" }
+                )
+            }
             
             var executedCount = 0
 

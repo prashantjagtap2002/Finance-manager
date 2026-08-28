@@ -17,6 +17,7 @@ FinanceManager combines elegant iOS-inspired minimalism with powerful envelope b
 - **Automatic Bank SMS Detection**: On-device regex-based parsing for bank debit/credit SMS alerts without uploading message contents.
 - **Interactive Approval Queue**: Categorize pending SMS transactions into expenses, income, or IOU debt settlements.
 - **Split IOU Money Settlement**: Settle borrowed/lent debts directly from incoming SMS logs with custom split payment amounts.
+- **Matched Pairs**: A debit and the credit that cancels it are detected and resolved together — a self transfer between your own accounts becomes one transfer, and money that came back (refund, failed payment, unallotted IPO block) cancels out instead of sitting in your spending total.
 
 ### 📊 **Interactive Reports & Financial Insights**
 - **Dynamic Period Filtering**: Switch between *This Cycle*, *Last Month*, *Last 3 Months*, *Year to Date*, or *Custom Date Ranges* via Material 3 DateRangePicker.

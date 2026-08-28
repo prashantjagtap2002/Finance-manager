@@ -136,7 +136,6 @@ class SyncWorker(
                         val local = dao.getAccountsList()
                         val accounts = local.map { AccountDto(it.id, it.name, it.type.name, it.balance, it.currency, userId) }
                         if (accounts.isNotEmpty()) client.postgrest["accounts"].upsert(accounts)
-                        if (!isInitialSync) deleteRemovedRows("accounts", local.map { it.id }.toSet(), userId)
                     },
                     syncTable("categories") {
                         val local = dao.getCategoriesList()
@@ -144,7 +143,6 @@ class SyncWorker(
                             CategoryDto(it.id, it.name, it.iconName, it.colorHex, it.budgetLimit, it.isZeroBased, it.rolloverAmount, it.isRolloverEnabled, it.displayOrder, userId)
                         }
                         if (categories.isNotEmpty()) client.postgrest["categories"].upsert(categories)
-                        if (!isInitialSync) deleteRemovedRows("categories", local.map { it.id }.toSet(), userId)
                     },
                     syncTable("transactions") {
                         val local = dao.getTransactionsList()
@@ -152,11 +150,10 @@ class SyncWorker(
                             TransactionDto(
                                 it.id, it.amount, it.type.name, it.categoryId, it.sourceAccountId, it.destinationAccountId,
                                 it.note, it.splitGroupId, it.date, it.currency, it.isRecurring, it.recurringId,
-                                it.isAutoLogged, it.merchantName, it.originalAmount, it.originalCurrency, userId
+                                it.isAutoLogged, it.merchantName, it.originalAmount, it.originalCurrency, it.isVerified, userId
                             )
                         }
                         if (transactions.isNotEmpty()) client.postgrest["transactions"].upsert(transactions)
-                        if (!isInitialSync) deleteRemovedRows("transactions", local.map { it.id }.toSet(), userId)
                     },
                     syncTable("savings_goals") {
                         val local = dao.getSavingsGoalsList()
@@ -164,7 +161,6 @@ class SyncWorker(
                             SavingsGoalDto(it.id, it.name, it.iconName, it.colorHex, it.targetAmount, it.savedAmount, it.targetDate, it.createdAt, userId)
                         }
                         if (goals.isNotEmpty()) client.postgrest["savings_goals"].upsert(goals)
-                        if (!isInitialSync) deleteRemovedRows("savings_goals", local.map { it.id }.toSet(), userId)
                     },
                     syncTable("recurring_transactions") {
                         val local = dao.getRecurringTransactionsList()
@@ -172,7 +168,6 @@ class SyncWorker(
                             RecurringTransactionDto(it.id, it.amount, it.type.name, it.categoryId, it.accountId, it.interval.name, it.note, it.startDate, it.nextExecutionDate, it.isAutoLog, it.isPaused, userId)
                         }
                         if (recurring.isNotEmpty()) client.postgrest["recurring_transactions"].upsert(recurring)
-                        if (!isInitialSync) deleteRemovedRows("recurring_transactions", local.map { it.id }.toSet(), userId)
                     },
                     syncTable("debts") {
                         val local = dao.getDebtsList()
@@ -180,7 +175,6 @@ class SyncWorker(
                             DebtDto(it.id, it.personName, it.amount, it.type.name, it.isSettled, it.date, it.dueDate, it.paidAmount, it.notes, it.interestRate, it.minimumPayment, userId)
                         }
                         if (debts.isNotEmpty()) client.postgrest["debts"].upsert(debts)
-                        if (!isInitialSync) deleteRemovedRows("debts", local.map { it.id }.toSet(), userId)
                     },
                     syncTable("sms_transactions") {
                         val local = dao.getSmsTransactionsList()
@@ -193,7 +187,6 @@ class SyncWorker(
                             )
                         }
                         if (smsTxs.isNotEmpty()) client.postgrest["sms_transactions"].upsert(smsTxs)
-                        if (!isInitialSync) deleteRemovedRows("sms_transactions", local.map { it.id }.toSet(), userId)
                     }
                 )
             }
@@ -256,8 +249,9 @@ class SyncWorker(
                 if (pullErrors.isEmpty()) markInitialSyncDone(applicationContext)
                 errors += runPush()
             } else {
-                errors += runPush()
+                // Pull first and never delete remote rows from a possibly stale local snapshot.
                 errors += runPull()
+                errors += runPush()
             }
 
             return if (errors.isEmpty()) {

@@ -83,27 +83,31 @@ fun DebtScreen(
         containerColor = DeepBackground,
         topBar = {
             TopAppBar(
-                title = { Text("IOU Tracker", style = Typography.titleLarge.copy(color = TextPrimary)) },
+                title = { Text(if (selectedTab == 2) "Group Expenses" else "IOU Tracker", style = Typography.titleLarge.copy(color = TextPrimary)) },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
                 actions = {
-                    IconButton(onClick = { showPayoffPlanner = true }) {
-                        Icon(Icons.AutoMirrored.Filled.TrendingDown, contentDescription = "Payoff Planner", tint = SecondaryTeal)
+                    if (selectedTab != 2) {
+                        IconButton(onClick = { showPayoffPlanner = true }) {
+                            Icon(Icons.AutoMirrored.Filled.TrendingDown, contentDescription = "Payoff Planner", tint = SecondaryTeal)
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
             )
         },
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = { showAddDialog = true },
-                containerColor = TextPrimary,
-                contentColor = DeepBackground
-            ) {
-                Icon(Icons.Default.Add, contentDescription = "Add Debt")
+            if (selectedTab != 2) {
+                FloatingActionButton(
+                    onClick = { showAddDialog = true },
+                    containerColor = TextPrimary,
+                    contentColor = DeepBackground
+                ) {
+                    Icon(Icons.Default.Add, contentDescription = "Add Debt")
+                }
             }
         }
     ) { padding ->
@@ -113,6 +117,7 @@ fun DebtScreen(
                 .padding(padding)
         ) {
             // Summary Header Cards
+            if (selectedTab < 2) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -163,6 +168,7 @@ fun DebtScreen(
                     }
                 }
             }
+            }
 
             // iOS Segmented Control Tabs
             Row(
@@ -176,7 +182,7 @@ fun DebtScreen(
                 val oweMeCount = debts.count { it.type == DebtType.LENT && !it.isSettled }
                 val iOweCount = debts.count { it.type == DebtType.BORROWED && !it.isSettled }
 
-                listOf("Owe Me ($oweMeCount)" to 0, "I Owe ($iOweCount)" to 1).forEach { (label, index) ->
+                listOf("Owe Me ($oweMeCount)" to 0, "I Owe ($iOweCount)" to 1, "Groups" to 2).forEach { (label, index) ->
                     val isSelected = selectedTab == index
                     val bg by androidx.compose.animation.animateColorAsState(
                         targetValue = if (isSelected) PrimaryViolet else Color.Transparent,
@@ -206,7 +212,9 @@ fun DebtScreen(
             }
 
             // List
-            if (activeDebts.isEmpty() && settledDebts.isEmpty()) {
+            if (selectedTab == 2) {
+                GroupExpensesContent(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+            } else if (activeDebts.isEmpty() && settledDebts.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, modifier = Modifier.size(64.dp), tint = TextSecondary)

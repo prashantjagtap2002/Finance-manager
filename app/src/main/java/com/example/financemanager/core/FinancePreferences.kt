@@ -37,6 +37,8 @@ object FinancePreferences {
     private const val KEY_PAY_CYCLE_FREQUENCY = "pay_cycle_frequency"
     private const val KEY_PAY_CYCLE_ANCHOR_DAY = "pay_cycle_anchor_day"
     private const val KEY_PRIVACY_MODE = "privacy_mode"
+    private const val KEY_DISMISSED_SMS_LINKS = "dismissed_sms_links"
+    private const val KEY_DASHBOARD_SECTIONS = "dashboard_sections"
 
     const val FREE_SCAN_LIMIT = 10
 
@@ -99,6 +101,39 @@ object FinancePreferences {
     fun setPrivacyMode(enabled: Boolean) {
         prefs().edit().putBoolean(KEY_PRIVACY_MODE, enabled).apply()
         _privacyMode.value = enabled
+    }
+
+    fun dashboardSections(): Set<String> = prefs().getStringSet(
+        KEY_DASHBOARD_SECTIONS,
+        setOf("accounts", "budgets", "transactions", "intelligence")
+    )?.toSet() ?: emptySet()
+
+    fun setDashboardSections(sections: Set<String>) {
+        prefs().edit().putStringSet(KEY_DASHBOARD_SECTIONS, sections).apply()
+    }
+
+    /**
+     * Debit/credit pairs the user has said are unrelated, keyed by the two SMS hashes.
+     *
+     * Kept out of the database on purpose: it records a judgement about a *suggestion*, not about
+     * the alerts themselves, and it has to survive the suggestion being recomputed from scratch
+     * every time the inbox changes.
+     */
+    fun dismissedSmsLinks(): Set<String> =
+        prefs().getStringSet(KEY_DISMISSED_SMS_LINKS, emptySet())?.toSet() ?: emptySet()
+
+    fun dismissSmsLink(key: String): Set<String> {
+        val updated = dismissedSmsLinks() + key
+        // A fresh set instance: SharedPreferences returns its own live copy, and mutating that
+        // one in place is documented not to persist.
+        prefs().edit().putStringSet(KEY_DISMISSED_SMS_LINKS, updated).apply()
+        return updated
+    }
+
+    fun restoreSmsLink(key: String): Set<String> {
+        val updated = dismissedSmsLinks() - key
+        prefs().edit().putStringSet(KEY_DISMISSED_SMS_LINKS, updated).apply()
+        return updated
     }
 
     fun currencyOption(code: String): CurrencyOption {

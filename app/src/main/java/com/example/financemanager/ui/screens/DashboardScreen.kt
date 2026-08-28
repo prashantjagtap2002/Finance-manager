@@ -67,6 +67,7 @@ fun DashboardScreen(
     onNavigateToQuickEntry: () -> Unit,
     onNavigateToBudget: () -> Unit,
     onNavigateToInsights: () -> Unit,
+    onNavigateToFinancialTools: () -> Unit = {},
     onNavigateToSettings: () -> Unit,
     onNavigateToLogs: () -> Unit,
     onNavigateToSearch: () -> Unit,
@@ -97,11 +98,18 @@ fun DashboardScreen(
     var editingCategory by remember { mutableStateOf<Category?>(null) }
     var updatingRolloverCategory by remember { mutableStateOf<Category?>(null) }
     var deletingCategory by remember { mutableStateOf<Category?>(null) }
+    var showDashboardCustomization by remember { mutableStateOf(false) }
+    var dashboardSections by remember { mutableStateOf(FinancePreferences.dashboardSections()) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    val totalBalance = accounts.sumOf { it.balance }
+    val totalBalance = remember(accounts) { accounts.sumOf { it.balance } }
+    val accountNames = remember(accounts) { accounts.associateBy { it.id } }
+    val categoryNames = remember(categories) { categories.associateBy { it.id } }
+    val unverifiedTxs = remember(transactions) {
+        transactions.filter { it.isAutoLogged && !it.isVerified }
+    }
 
     // Bills due in the next 7 days
     val upcomingBills = remember(recurring) {
@@ -143,6 +151,9 @@ fun DashboardScreen(
                     }
                     IconButton(onClick = onNavigateToSettings) {
                         Icon(Icons.Default.Settings, contentDescription = "Settings")
+                    }
+                    IconButton(onClick = { showDashboardCustomization = true }) {
+                        Icon(Icons.Default.Tune, contentDescription = "Customize dashboard")
                     }
                 }
             )
@@ -190,7 +201,6 @@ fun DashboardScreen(
                 }
             }
 
-            val unverifiedTxs = transactions.filter { it.isAutoLogged && !it.isVerified }
             if (unverifiedTxs.isNotEmpty()) {
                 item {
                     iOSCard(modifier = Modifier.fillMaxWidth()) {
@@ -389,10 +399,30 @@ fun DashboardScreen(
             }
 
             // AI Recap Card
+            if ("intelligence" in dashboardSections) item {
+                iOSCard(
+                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToFinancialTools() },
+                    style = iOSCardStyle.Grouped
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(Icons.Default.Insights, contentDescription = null, tint = SecondaryTeal)
+                        Column(Modifier.weight(1f)) {
+                            Text("Financial Intelligence", style = Typography.titleMedium.copy(color = TextPrimary))
+                            Text("Health score, what-if plans, merchants & calendar", style = Typography.bodySmall.copy(color = TextSecondary))
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
+                    }
+                }
+            }
+
             aiRecap?.let { text ->
-                item {
+                if ("intelligence" in dashboardSections) item {
                     iOSCard(
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().clickable { onNavigateToFinancialTools() },
                         style = iOSCardStyle.Grouped
                     ) {
                         Row(
@@ -548,7 +578,7 @@ fun DashboardScreen(
             }
 
             // 4. Accounts List (Horizontal Carousel)
-            item {
+            if ("accounts" in dashboardSections) item {
                 Column {
                     SectionHeader("Accounts")
                     Spacer(modifier = Modifier.height(10.dp))
@@ -563,13 +593,13 @@ fun DashboardScreen(
             }
 
             // 5. Envelope Budgets / Categories
-            item {
+            if ("budgets" in dashboardSections) item {
                 SectionHeader("Envelope Budgets") {
                     SectionAction("Manage", onNavigateToBudget)
                 }
             }
 
-            items(categories, key = { "cat-${it.id}" }) { category ->
+            if ("budgets" in dashboardSections) items(categories, key = { "cat-${it.id}" }) { category ->
                 // Spending this month only, from the shared monthly map
                 val categorySpent = monthlyCategorySpend[category.id] ?: 0.0
                 val now = java.util.Calendar.getInstance()
@@ -587,7 +617,7 @@ fun DashboardScreen(
             }
 
             // 6. Recent Transactions Section Header
-            item {
+            if ("transactions" in dashboardSections) item {
                 SectionHeader("Recent Transactions") {
                     SectionAction("SMS", onNavigateToSmsTransactions)
                     Spacer(modifier = Modifier.width(4.dp))
@@ -595,7 +625,7 @@ fun DashboardScreen(
                 }
             }
 
-            if (transactions.isEmpty()) {
+            if ("transactions" in dashboardSections && transactions.isEmpty()) {
                 item {
                     Box(
                         modifier = Modifier
@@ -608,9 +638,9 @@ fun DashboardScreen(
                 }
             }
 
-            items(transactions.take(10), key = { "tx-${it.id}" }) { transaction ->
-                val accountName = accounts.firstOrNull { it.id == transaction.sourceAccountId }?.name ?: "Account"
-                val categoryName = categories.firstOrNull { it.id == transaction.categoryId }?.name ?: "Income/Transfer"
+            if ("transactions" in dashboardSections) items(transactions.take(10), key = { "tx-${it.id}" }) { transaction ->
+                val accountName = accountNames[transaction.sourceAccountId]?.name ?: "Account"
+                val categoryName = categoryNames[transaction.categoryId]?.name ?: "Income/Transfer"
                 TransactionItem(
                     transaction = transaction,
                     accountName = accountName,
@@ -627,6 +657,30 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(64.dp))
             }
         }
+    }
+
+    if (showDashboardCustomization) {
+        AlertDialog(
+            onDismissRequest = { showDashboardCustomization = false },
+            containerColor = DarkSurface,
+            title = { Text("Customize dashboard", color = TextPrimary) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Choose the sections you want to see.", color = TextSecondary)
+                            listOf("accounts" to "Accounts", "budgets" to "Envelope budgets", "transactions" to "Recent transactions", "intelligence" to "Financial intelligence").forEach { (key, label) ->
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
+                            dashboardSections = if (key in dashboardSections) dashboardSections - key else dashboardSections + key
+                        }) {
+                            Checkbox(checked = key in dashboardSections, onCheckedChange = { checked -> dashboardSections = if (checked) dashboardSections + key else dashboardSections - key })
+                            Text(label, color = TextPrimary)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { FinancePreferences.setDashboardSections(dashboardSections); showDashboardCustomization = false }) { Text("Done", color = AccentGreen) }
+            }
+        )
     }
 
     // Edit Transaction Dialog on Dashboard
