@@ -54,6 +54,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -69,6 +71,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -100,6 +103,7 @@ import com.example.financemanager.theme.WarningAmber
 
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
@@ -143,6 +147,17 @@ fun QuickEntryScreen(
     var receiptResult by remember { mutableStateOf<OcrResult?>(null) }
     var showUpgradePrompt by remember { mutableStateOf(false) }
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
+
+    /** Transient confirmation that stays inside the app's own surface, unlike a toast. */
+    fun notify(message: String) {
+        snackbarScope.launch {
+            snackbarHostState.showSnackbar(message, withDismissAction = true)
+        }
+    }
+
+
     fun applyNlp(text: String) {
         val result = viewModel.parseNlpPhrase(text)
         result.amount?.let { viewModel.setAmount(it) }
@@ -175,11 +190,11 @@ fun QuickEntryScreen(
                     applyNlp(merchant)
                 }
                 selectedType = TransactionType.EXPENSE
-                Toast.makeText(context, if (result.total == null) "Receipt scanned. Review the extracted details." else "Receipt scanned.", Toast.LENGTH_SHORT).show()
+                notify(if (result.total == null) "Receipt scanned — review the extracted details" else "Receipt scanned")
             },
             onFailure = {
                 isScanningReceipt = false
-                Toast.makeText(context, "Receipt scan failed: ${it.localizedMessage}", Toast.LENGTH_LONG).show()
+                notify("Receipt scan failed: ${it.localizedMessage}")
             }
         )
     }
@@ -205,7 +220,7 @@ fun QuickEntryScreen(
         try {
             speechLauncher.launch(intent)
         } catch (_: Exception) {
-            Toast.makeText(context, "Voice input isn't available on this device.", Toast.LENGTH_SHORT).show()
+            notify("Voice input isn't available on this device")
         }
     }
 
@@ -216,6 +231,7 @@ fun QuickEntryScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Quick Transaction", style = Typography.titleLarge.copy(color = TextPrimary)) },
@@ -642,15 +658,15 @@ fun QuickEntryScreen(
                         val amount = amountText.toDoubleOrNull() ?: 0.0
                         val srcAccountId = selectedAccountId
                         if (amount <= 0.0) {
-                            Toast.makeText(context, "Please enter a valid amount.", Toast.LENGTH_SHORT).show()
+                            notify("Enter an amount greater than zero")
                             return@iOSButton
                         }
                         if (srcAccountId == null) {
-                            Toast.makeText(context, "Please select a source account.", Toast.LENGTH_SHORT).show()
+                            notify("Pick the account this came from")
                             return@iOSButton
                         }
                         if (selectedType == TransactionType.TRANSFER && destinationAccountId == null && noteInput.isBlank()) {
-                            Toast.makeText(context, "Select a destination account or enter a transfer note.", Toast.LENGTH_SHORT).show()
+                            notify("Pick a destination account, or add a note for the transfer")
                             return@iOSButton
                         }
 
@@ -661,7 +677,7 @@ fun QuickEntryScreen(
                             }
                             val splitTotal = parsedSplits.sumOf { it.second }
                             if (kotlin.math.abs(splitTotal - amount) > 0.01) {
-                                Toast.makeText(context, "Split amounts must sum to the total amount.", Toast.LENGTH_SHORT).show()
+                                notify("The split amounts have to add up to the total")
                                 return@iOSButton
                             }
                             val taggedNote = listOf(noteInput.ifBlank { nlpTextInput.ifBlank { "Split transaction" } }, hashtagInput.trim()).filter { it.isNotBlank() }.joinToString(" ")

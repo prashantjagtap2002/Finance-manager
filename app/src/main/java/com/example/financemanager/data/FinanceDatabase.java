@@ -11,8 +11,10 @@ import androidx.room.migration.Migration;
 
 @Database(
     entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class, MerchantRule.class, Investment.class, InvestmentTransaction.class, ExpenseGroup.class, ExpenseGroupMember.class, ExpenseGroupExpense.class},
-    version = 17,
-    exportSchema = false
+    version = 18,
+    // Exported schemas are what MigrationTestHelper replays old databases against. Without them
+    // nothing checks that the hand-written migrations below still agree with the entities.
+    exportSchema = true
 )
 @TypeConverters({Converters.class})
 public abstract class FinanceDatabase extends RoomDatabase {
@@ -241,7 +243,25 @@ public abstract class FinanceDatabase extends RoomDatabase {
         }
     };
 
-    public static FinanceDatabase getDatabase(final Context context, final kotlinx.coroutines.CoroutineScope scope) {
+    /**
+     * Adds the indices the hot queries need. Creating an index neither rewrites nor drops a row,
+     * so this is safe on a populated database; the names must match what Room generates for the
+     * entity declarations or validation fails on open.
+     */
+    public static final Migration MIGRATION_17_18 = new Migration(17, 18) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_date` ON `transactions` (`date`)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_categoryId` ON `transactions` (`categoryId`)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_sourceAccountId` ON `transactions` (`sourceAccountId`)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_transactions_destinationAccountId` ON `transactions` (`destinationAccountId`)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_sms_transactions_rawTimestamp` ON `sms_transactions` (`rawTimestamp`)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_investment_transactions_investmentId` ON `investment_transactions` (`investmentId`)");
+            database.execSQL("CREATE INDEX IF NOT EXISTS `index_debts_date` ON `debts` (`date`)");
+        }
+    };
+
+    public static FinanceDatabase getDatabase(final Context context) {
         if (INSTANCE == null) {
             synchronized (FinanceDatabase.class) {
                 if (INSTANCE == null) {
@@ -250,7 +270,7 @@ public abstract class FinanceDatabase extends RoomDatabase {
                         FinanceDatabase.class,
                         "finance_database"
                     )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18)
                     .addCallback(new RoomDatabase.Callback() {
                         @Override
                         public void onCreate(@NonNull SupportSQLiteDatabase db) {

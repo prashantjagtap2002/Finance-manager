@@ -15,8 +15,6 @@ import com.example.financemanager.data.FinanceDatabase
 import com.example.financemanager.data.remote.*
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.GlobalScope
 import kotlinx.serialization.Serializable
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -29,7 +27,6 @@ private data class IdOnly(val id: Long)
  */
 private val syncInProgress = AtomicBoolean(false)
 
-@OptIn(DelicateCoroutinesApi::class)
 class SyncWorker(
     appContext: Context,
     workerParams: WorkerParameters
@@ -117,7 +114,7 @@ class SyncWorker(
                 return Result.failure()
             }
 
-            val db = FinanceDatabase.getDatabase(applicationContext, GlobalScope)
+            val db = FinanceDatabase.getDatabase(applicationContext)
             val dao = db.financeDao()
             val client = SupabaseManager.client
 

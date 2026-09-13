@@ -7,10 +7,13 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.core.view.WindowCompat
 import com.example.financemanager.core.ThemePreference
 
 val LocalThemeIsDark = compositionLocalOf { true }
@@ -78,6 +81,20 @@ fun FinanceManagerTheme(themeMode: ThemePreference = ThemePreference.SYSTEM, con
         ThemePreference.LIGHT -> false
         ThemePreference.DARK -> true
     }
+    // enableEdgeToEdge() picks status/navigation bar icon colours from the *system* setting, so
+    // a user on Light while the phone is in dark mode would get white icons on a white bar.
+    // The app's own theme is the authority here.
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = (view.context as? android.app.Activity)?.window ?: return@SideEffect
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
+    }
+
     CompositionLocalProvider(LocalThemeIsDark provides darkTheme) {
         MaterialTheme(colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme, typography = Typography, shapes = AppShapes, content = content)
     }

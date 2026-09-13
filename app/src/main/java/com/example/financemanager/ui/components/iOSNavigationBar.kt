@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import com.example.financemanager.theme.BorderColor
 import com.example.financemanager.theme.DeepBackground
 import com.example.financemanager.theme.TextMuted
+import com.example.financemanager.theme.TextSecondary
 import com.example.financemanager.theme.TextPrimary
 
 /**
@@ -83,7 +84,9 @@ fun iOSTopAppBar(
             titleContentColor = TextPrimary,
             // Neutral icons keep the bar quiet; the accent stays on the FAB.
             navigationIconContentColor = TextPrimary,
-            actionIconContentColor = TextMuted
+            // Tertiary grey reads as "disabled" on a light canvas; these are
+            // live actions, so they sit one step up.
+            actionIconContentColor = TextSecondary
         )
     )
 }

@@ -31,3 +31,4 @@ plugins {
 
 rootProject.name = "FinanceManager"
 include(":app")
+include(":baselineprofile")

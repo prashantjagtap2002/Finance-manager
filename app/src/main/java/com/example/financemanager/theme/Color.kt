@@ -72,15 +72,19 @@ val ChartPaletteDark = listOf(
 )
 
 // --- Neutrals ------------------------------------------------------------
-// Light: a hair of cool grey in the canvas so white cards read as raised
-// without needing shadows.
-val AppBackgroundLight = Color(0xFFF6F7F9)
+// Light: the canvas is pulled well clear of white so a white card is read as a
+// card. The earlier near-white canvas left only a 3% step against its cards,
+// which flattened every screen into one grey sheet; dark mode gets a ~7% step
+// between canvas and surface, and light mode needs the same room.
+val AppBackgroundLight = Color(0xFFEDF0F5)
 val AppSurfaceLight = Color(0xFFFFFFFF)
-val AppSurfaceVariantLight = Color(0xFFEFF1F4)
-val AppTextPrimaryLight = Color(0xFF0C0E12)
-val AppTextSecondaryLight = Color(0xFF5D6472)
-val AppTextTertiaryLight = Color(0xFF8E96A3)
-val AppOutlineLight = Color(0xFFE4E7EC)
+// Fills and chips sit a step *below* the canvas here, the way they sit a step
+// above it in dark — recessed either way.
+val AppSurfaceVariantLight = Color(0xFFE2E7EF)
+val AppTextPrimaryLight = Color(0xFF0B0D12)
+val AppTextSecondaryLight = Color(0xFF4E5666)
+val AppTextTertiaryLight = Color(0xFF757D8C)
+val AppOutlineLight = Color(0xFFDCE1E9)
 
 // Dark: true near-black canvas, not navy. Cards step up in lightness only.
 val AppBackgroundDark = Color(0xFF0A0A0C)

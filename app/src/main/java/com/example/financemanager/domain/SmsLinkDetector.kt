@@ -106,15 +106,34 @@ object SmsLinkDetector {
         dismissedKeys: Set<String> = emptySet()
     ): List<SmsLink> {
         val usable = candidates.filterNot { it.isIgnored }
-        val debits = usable.filter { it.type == "debit" }
+        // A leg whose amount the parser couldn't read can never match, so it is dropped up front
+        // rather than re-parsed inside the loop. Amount and refund wording are worked out once per
+        // message here; the old nested loop re-ran both regexes on every debit/credit combination.
+        val debits = usable.asSequence()
+            .filter { it.type == "debit" }
+            .mapIndexedNotNull { index, sms -> Leg.of(sms, index) }
+            .toList()
         // An already-approved credit is settled income the user chose to log; only the debit side
         // is worth revisiting, because that's the leg that inflates spending.
-        val credits = usable.filter { it.type == "credit" && !it.isApproved }
+        val credits = usable.asSequence()
+            .filter { it.type == "credit" && !it.isApproved }
+            .mapIndexedNotNull { index, sms -> Leg.of(sms, index) }
+            .toList()
         if (debits.isEmpty() || credits.isEmpty()) return emptyList()
+
+        // Two legs only pair when their amounts match to within AMOUNT_EPSILON, so there is no
+        // reason to compare a debit against every credit in the history — an SMS XML import leaves
+        // thousands of rows and this used to be one full pass per debit. Bucketing by whole paise
+        // makes it a lookup instead. Epsilon is half a paisa, so two matching amounts can land at
+        // most one bucket apart, and probing the neighbours keeps every real pair reachable.
+        val creditsByPaise = credits.groupBy { it.paise }
 
         val possible = mutableListOf<SmsLink>()
         debits.forEach { debit ->
-            credits.forEach { credit ->
+            val nearby = (-1..1).flatMap { creditsByPaise[debit.paise + it].orEmpty() }
+            // Restore the original credit ordering, so equally-ranked pairs still break ties the
+            // way the straight nested loop did.
+            nearby.sortedBy { it.index }.forEach { credit ->
                 link(debit, credit)?.let { if (it.key !in dismissedKeys) possible += it }
             }
         }
@@ -139,12 +158,36 @@ object SmsLinkDetector {
         }
     }
 
+    /**
+     * One side of a possible pair, with the two values worth computing only once: the parsed
+     * amount, and whether the body says "refund"/"reversed"/"released" in so many words.
+     * [index] is the message's position in its own list, used to keep tie-breaking stable.
+     */
+    private class Leg(
+        val sms: SmsTransaction,
+        val index: Int,
+        val amount: Double,
+        val statedReversal: Boolean
+    ) {
+        /** The amount in whole paise, which is what the bucketing keys on. */
+        val paise: Long = Math.round(amount * 100)
+
+        companion object {
+            fun of(sms: SmsTransaction, index: Int): Leg? {
+                val amount = amountOf(sms) ?: return null
+                return Leg(sms, index, amount, reversalWordsRegex.containsMatchIn(sms.body))
+            }
+        }
+    }
+
     /** The pair these two form, or null if they aren't one. */
-    private fun link(debit: SmsTransaction, credit: SmsTransaction): SmsLink? {
+    private fun link(debitLeg: Leg, creditLeg: Leg): SmsLink? {
+        val debit = debitLeg.sms
+        val credit = creditLeg.sms
         if (debit.id == credit.id) return null
 
-        val debitAmount = amountOf(debit) ?: return null
-        val creditAmount = amountOf(credit) ?: return null
+        val debitAmount = debitLeg.amount
+        val creditAmount = creditLeg.amount
         if (kotlin.math.abs(debitAmount - creditAmount) > AMOUNT_EPSILON) return null
 
         // Money can only come back after it left.
@@ -154,7 +197,7 @@ object SmsLinkDetector {
 
         val sharedReference = debit.reference.isNotBlank() &&
             debit.reference.equals(credit.reference, ignoreCase = true)
-        val statedReversal = reversalWordsRegex.containsMatchIn(credit.body)
+        val statedReversal = creditLeg.statedReversal
 
         val sameAccount = debit.accountName.isNotBlank() &&
             debit.accountName.equals(credit.accountName, ignoreCase = true)

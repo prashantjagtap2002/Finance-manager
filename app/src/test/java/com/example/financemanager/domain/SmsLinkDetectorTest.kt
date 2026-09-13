@@ -86,6 +86,32 @@ class SmsLinkDetectorTest {
         assertTrue(SmsLinkDetector.detect(listOf(debit, credit)).isEmpty())
     }
 
+    /**
+     * Candidates are bucketed by whole paise to avoid comparing every debit against every credit.
+     * A pair whose amounts differ by less than the epsilon but round into *adjacent* buckets is
+     * the case that bucketing can silently drop, so it is pinned here.
+     */
+    @Test
+    fun pairsAmountsThatStraddleAPaiseBoundary() {
+        val debit = sms("debit", "Rs.5000.004", "SBI", 0)
+        val credit = sms("credit", "Rs.5000.006", "Kotak", 2)
+
+        val links = SmsLinkDetector.detect(listOf(debit, credit))
+
+        assertEquals(1, links.size)
+        assertEquals(debit.id, links[0].debit.id)
+        assertEquals(credit.id, links[0].credit.id)
+    }
+
+    /** The other side of that boundary: a gap wider than the epsilon must still not pair. */
+    @Test
+    fun ignoresAmountsJustOutsideTheEpsilon() {
+        val debit = sms("debit", "Rs.5000.00", "SBI", 0)
+        val credit = sms("credit", "Rs.5000.02", "Kotak", 2)
+
+        assertEquals(0, SmsLinkDetector.detect(listOf(debit, credit)).size)
+    }
+
     @Test
     fun ignoresDifferentAmounts() {
         val debit = sms("debit", "Rs.500.00", "SBI", 0)

@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -22,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import com.example.financemanager.data.Category
 import com.example.financemanager.theme.*
 import com.example.financemanager.ui.screens.TransactionItem
+import com.example.financemanager.ui.components.EmptyState
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import kotlinx.coroutines.flow.map
 
@@ -148,9 +150,15 @@ fun SearchScreen(
             ) {
                 if (searchResults.isEmpty()) {
                     item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) {
-                            Text("No transactions found.", style = Typography.bodyMedium.copy(color = TextSecondary))
-                        }
+                        EmptyState(
+                            icon = if (searchQuery.isBlank()) Icons.Default.Search else Icons.Default.SearchOff,
+                            title = if (searchQuery.isBlank()) "Search your history" else "No matches",
+                            message = if (searchQuery.isBlank())
+                                "Find a transaction by note, merchant, amount or #tag."
+                            else
+                                "Nothing matched \"$searchQuery\". Try fewer words, or a merchant name.",
+                            accent = SecondaryTeal
+                        )
                     }
                 } else {
                     items(searchResults, key = { it.id }) { tx ->

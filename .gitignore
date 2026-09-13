@@ -9,8 +9,14 @@
 /.idea/assetWizardSettings.xml
 .DS_Store
 /build
+# Any module build output, not just the root project one.
+build/
 /captures
 .externalNativeBuild
 .cxx
 local.properties
 .kotlin/
+# Release signing material - never commit these.
+keystore.properties
+*.jks
+*.keystore

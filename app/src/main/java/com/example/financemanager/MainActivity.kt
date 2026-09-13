@@ -18,7 +18,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.example.financemanager.core.AppLock
 import com.example.financemanager.core.FinancePreferences
 import com.example.financemanager.services.NotificationHelper
@@ -58,27 +62,6 @@ class MainActivity : FragmentActivity() {
         AppLock.init(this)
         val prefs = getSharedPreferences("finance_prefs", Context.MODE_PRIVATE)
 
-        NotificationHelper.ensureChannels(this)
-        requestSmsPermissionIfNeeded()
-        requestNotificationPermissionIfNeeded()
-
-        // Initialize Auto-Execution Worker
-        val workRequest = PeriodicWorkRequestBuilder<RecurringTransactionWorker>(1, TimeUnit.DAYS).build()
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "RecurringTxWorker",
-            ExistingPeriodicWorkPolicy.KEEP,
-            workRequest
-        )
-
-        // Initialize Cloud Sync Worker
-        val syncRequest = PeriodicWorkRequestBuilder<SyncWorker>(12, TimeUnit.HOURS)
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "CloudSyncWorker",
-            ExistingPeriodicWorkPolicy.KEEP,
-            syncRequest
-        )
 
         executor = ContextCompat.getMainExecutor(this)
 
@@ -157,6 +140,37 @@ class MainActivity : FragmentActivity() {
                 }
             }
         }
+
+        // None of this is needed to draw the first frame, and all of it touches disk: creating
+        // notification channels, and spinning up WorkManager to write two rows to its own
+        // database. Running it inline was part of why the first frame arrived late. The permission
+        // sheets are deferred too — they read better over a drawn UI than over a blank window.
+        lifecycleScope.launch {
+            withContext(Dispatchers.Default) {
+                NotificationHelper.ensureChannels(this@MainActivity)
+                scheduleBackgroundWork()
+            }
+            requestSmsPermissionIfNeeded()
+            requestNotificationPermissionIfNeeded()
+        }
+    }
+
+    /** Registers the two periodic workers. KEEP means re-registering on every launch is free. */
+    private fun scheduleBackgroundWork() {
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "RecurringTxWorker",
+            ExistingPeriodicWorkPolicy.KEEP,
+            PeriodicWorkRequestBuilder<RecurringTransactionWorker>(1, TimeUnit.DAYS).build()
+        )
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "CloudSyncWorker",
+            ExistingPeriodicWorkPolicy.KEEP,
+            PeriodicWorkRequestBuilder<SyncWorker>(12, TimeUnit.HOURS)
+                .setConstraints(
+                    Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+                )
+                .build()
+        )
     }
 
     override fun onStart() {

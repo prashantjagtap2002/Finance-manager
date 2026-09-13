@@ -156,7 +156,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     init {
         FinancePreferences.init(application)
-        val database = FinanceDatabase.getDatabase(application, viewModelScope)
+        val database = FinanceDatabase.getDatabase(application)
         repository = FinanceRepository(database.financeDao())
 
         accounts = repository.accounts.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -253,36 +253,40 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             FinancePreferences.payCycleAnchorDayFlow.collect { _payCycleAnchorDay.value = it }
         }
 
-        monthlyExpenseTotal = repository.transactions
+        monthlyExpenseTotal = transactions
             .map { txList ->
                 val (start, end) = currentPayCycleRange()
                 txList.filter { it.type == TransactionType.EXPENSE && it.date in start..end }
                     .sumOf { it.amount }
             }
+            .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
 
-        monthlyIncomeTotal = repository.transactions
+        monthlyIncomeTotal = transactions
             .map { txList ->
                 val (start, end) = currentPayCycleRange()
                 txList.filter { it.type == TransactionType.INCOME && it.date in start..end }
                     .sumOf { it.amount }
             }
+            .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
 
-        monthlyCategorySpend = repository.transactions
+        monthlyCategorySpend = transactions
             .map { txList ->
                 val (start, end) = currentPayCycleRange()
                 txList.filter { it.type == TransactionType.EXPENSE && it.date in start..end }
                     .groupBy { it.categoryId }
                     .mapValues { (_, txs) -> txs.sumOf { it.amount } }
             }
+            .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
-        streakDays = repository.transactions
+        streakDays = transactions
             .map { txList -> computeStreakDays(txList) }
+            .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
-        sixMonthTrendData = repository.transactions
+        sixMonthTrendData = transactions
             .map { txList ->
                 val now = Calendar.getInstance()
                 now.set(Calendar.DAY_OF_MONTH, 1)
@@ -308,6 +312,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
                 result
             }
+            .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
         cashflowWarning = combine(accounts, recurringTransactions) { accs, recs ->
@@ -320,13 +325,14 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 }
             }
             null
-        }.stateIn(viewModelScope, SharingStarted.Lazily, null)
+        }.flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.Lazily, null)
 
         safeToSpend = combine(
-            repository.accounts,
-            repository.categories,
-            repository.savingsGoals,
-            repository.recurringTransactions
+            accounts,
+            categories,
+            savingsGoals,
+            recurringTransactions
         ) { accList, catList, goalsList, recList ->
             val totalBalance = accList.sumOf { it.balance }
             val remainingBudgets = catList.filter { it.budgetLimit > 0 }.sumOf { 
@@ -339,12 +345,13 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             // Just a rough estimate for Safe to Spend
             val safe = totalBalance - remainingBudgets - (remainingGoals * 0.1) - upcomingBills
             if (safe < 0) 0.0 else safe
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+        }.flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
 
         unlockedBadges = combine(
             streakDays,
-            repository.savingsGoals,
-            repository.transactions
+            savingsGoals,
+            transactions
         ) { streak, goalsList, txList ->
             val badges = mutableListOf<String>()
             if (streak >= 7) badges.add("7-Day Streak")
@@ -352,9 +359,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             if (goalsList.sumOf { it.savedAmount } >= 10000) badges.add("10K Saved")
             if (txList.size >= 100) badges.add("100 Logged")
             badges
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        }.flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-        aiRecapText = repository.transactions.map { txList ->
+        aiRecapText = transactions.map { txList ->
             val now = System.currentTimeMillis()
             val oneWeekMs = 7L * 24 * 60 * 60 * 1000
             val thisWeekSpent = txList.filter { it.type == TransactionType.EXPENSE && it.date > now - oneWeekMs }.sumOf { it.amount }
@@ -363,9 +371,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             if (thisWeekSpent == 0.0 && lastWeekSpent == 0.0) null
             else if (thisWeekSpent < lastWeekSpent) "You spent ${moneyString(thisWeekSpent, false)} this week — that's less than last week! 🎉"
             else "You spent ${moneyString(thisWeekSpent, false)} this week. Watch your expenses to stay on track!"
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+        }.flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
-        netWorthHistory = combine(repository.accounts, repository.transactions, repository.debts) { accountsList, txList, debtsList ->
+        netWorthHistory = combine(accounts, transactions, debts) { accountsList, txList, debtsList ->
             val now = Calendar.getInstance()
             now.set(Calendar.DAY_OF_MONTH, 1)
             now.add(Calendar.MONTH, -5)
@@ -415,7 +424,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             
             // Reverse so it's chronological
             result.toList().reversed().toMap()
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+        }.flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
         // Check for missed recurring payments on app start
         viewModelScope.launch {
@@ -1878,9 +1888,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             )
             repository.insertTransaction(transaction)
 
-            // Update account balance
-            val newBalance = if (txType == TransactionType.INCOME) account.balance + paymentAmount else account.balance - paymentAmount
-            repository.updateAccount(account.copy(balance = newBalance))
+            // insertTransaction already applies the ledger balance effect. Updating the account
+            // here as well would charge/credit the account twice.
             SyncWorker.enqueueNow(getApplication())
         }
     }
@@ -1953,6 +1962,54 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             // Learn the filing decision so the next alert from this merchant arrives categorised.
             repository.rememberMerchantCategory(smsTransaction.counterparty, categoryId, accountId)
 
+            SyncWorker.enqueueNow(getApplication())
+        }
+    }
+
+    /**
+     * Creates an IOU from an SMS approval. The SMS still needs to affect the account balance,
+     * but the movement is recorded as a transfer-side ledger row so it does not inflate an
+     * envelope's spending or income totals.
+     *
+     * A debit means the user lent money (the person owes them); a credit means the user received
+     * borrowed money (the user owes the person).
+     */
+    fun createIouFromSms(
+        smsTransaction: SmsTransaction,
+        accountId: Long,
+        personName: String,
+        amount: Double,
+        notes: String = ""
+    ) {
+        if (accountId <= 0 || personName.isBlank() || amount <= 0.0) return
+        viewModelScope.launch {
+            val type = if (smsTransaction.type == "credit") DebtType.BORROWED else DebtType.LENT
+            val cleanName = personName.trim()
+            val cleanNotes = notes.trim().ifEmpty { "Created from bank SMS" }
+            repository.insertDebt(
+                Debt(
+                    personName = cleanName,
+                    amount = amount,
+                    type = type,
+                    date = smsTransaction.rawTimestamp,
+                    notes = cleanNotes
+                )
+            )
+            val loggedId = repository.postLedgerSideEffect(
+                accountId = accountId,
+                amount = if (type == DebtType.BORROWED) amount else -amount,
+                note = "IOU with $cleanName",
+                date = smsTransaction.rawTimestamp
+            )
+            repository.updateSmsTransaction(
+                smsTransaction.copy(
+                    isApproved = true,
+                    isIgnored = false,
+                    approvedCategoryId = 0L,
+                    approvedAccountId = accountId,
+                    loggedTransactionId = loggedId
+                )
+            )
             SyncWorker.enqueueNow(getApplication())
         }
     }

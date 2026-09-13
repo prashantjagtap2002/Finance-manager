@@ -5,6 +5,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.example.financemanager.domain.AccountLedger
 import com.example.financemanager.data.*
+import com.example.financemanager.domain.SmsParser
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -65,6 +66,10 @@ class SmsNotificationListenerService : NotificationListenerService() {
     }
 
     fun parseNotificationContent(content: String, sourceApp: String) {
+        // Notification text can look like a payment even when it is a card offer, cashback
+        // campaign, or game promotion. Keep the same high-confidence guard used by SMS import.
+        if (SmsParser.isPromotionalMessage(content)) return
+
         for (template in bankTemplates) {
             val match = template.regex.find(content)
             if (match != null && match.groupValues.size > maxOf(template.amountGroup, template.merchantGroup)) {
@@ -76,7 +81,7 @@ class SmsNotificationListenerService : NotificationListenerService() {
 
                 // Log the transaction to DB in background
                 serviceScope.launch {
-                    val db = FinanceDatabase.getDatabase(applicationContext, this)
+                    val db = FinanceDatabase.getDatabase(applicationContext)
                     val dao = db.financeDao()
 
                     // Try to match category based on merchant name

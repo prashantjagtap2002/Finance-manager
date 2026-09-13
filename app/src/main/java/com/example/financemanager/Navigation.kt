@@ -117,9 +117,11 @@ fun MainNavigation(
                         onNavigateToQuickEntry = { backStack.add(QuickEntry) },
                         onNavigateToBudget = { backStack.add(Budget) },
                         onNavigateToInsights = { backStack.add(Insights) },
-                        onNavigateToFinancialTools = { backStack.add(FinancialTools) },
                         onNavigateToSettings = { backStack.add(Settings) },
                         onNavigateToLogs = { backStack.add(TransactionLogs) },
+                        onNavigateToAccountTransactions = { accountId ->
+                            backStack.add(AccountTransactions(accountId))
+                        },
                         onNavigateToSubscriptions = { backStack.add(Subscriptions) },
                         onNavigateToSearch = { backStack.add(Search) },
                         onNavigateToGoals = { backStack.add(Goals) },
@@ -165,12 +167,6 @@ fun MainNavigation(
                         }
                     )
                 }
-                entry<FinancialTools> {
-                    FinancialToolsScreen(
-                        viewModel = viewModel,
-                        onNavigateBack = { backStack.removeLastOrNull() }
-                    )
-                }
                 entry<CustomInsight> {
                     CustomInsightScreen(
                         viewModel = viewModel,
@@ -188,6 +184,13 @@ fun MainNavigation(
                 entry<TransactionLogs> {
                     TransactionLogsScreen(
                         viewModel = viewModel,
+                        onNavigateBack = { backStack.removeLastOrNull() }
+                    )
+                }
+                entry<AccountTransactions> {
+                    TransactionLogsScreen(
+                        viewModel = viewModel,
+                        initialAccountId = it.accountId,
                         onNavigateBack = { backStack.removeLastOrNull() }
                     )
                 }

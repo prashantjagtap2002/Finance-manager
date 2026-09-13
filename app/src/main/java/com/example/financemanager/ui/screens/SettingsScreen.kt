@@ -48,6 +48,16 @@ fun SettingsScreen(
     onNavigateToSubscriptions: () -> Unit = {},
     onNavigateToSmsTransactions: () -> Unit = {}
 ) {
+    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
+
+    /** Transient confirmation that stays inside the app's own surface, unlike a toast. */
+    fun notify(message: String) {
+        snackbarScope.launch {
+            snackbarHostState.showSnackbar(message, withDismissAction = true)
+        }
+    }
+
     val accounts by viewModel.accounts.collectAsState()
     val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsState()
     val hasSecurityPin by viewModel.hasSecurityPin.collectAsState()
@@ -91,8 +101,8 @@ fun SettingsScreen(
                 viewModel.exportBackupToUri(
                     context = context,
                     uri = uri,
-                    onSuccess = { Toast.makeText(context, "Backup exported successfully!", Toast.LENGTH_SHORT).show() },
-                    onError = { err -> Toast.makeText(context, "Export failed: $err", Toast.LENGTH_LONG).show() }
+                    onSuccess = { notify("Backup exported") },
+                    onError = { err -> notify("Export failed: $err") }
                 )
             }
         }
@@ -105,8 +115,8 @@ fun SettingsScreen(
                 viewModel.exportTransactionsToUri(
                     context = context,
                     uri = uri,
-                    onSuccess = { Toast.makeText(context, "Transactions exported successfully!", Toast.LENGTH_SHORT).show() },
-                    onError = { err -> Toast.makeText(context, "Export failed: $err", Toast.LENGTH_LONG).show() }
+                    onSuccess = { notify("Transactions exported") },
+                    onError = { err -> notify("Export failed: $err") }
                 )
             }
         }
@@ -123,6 +133,7 @@ fun SettingsScreen(
     )
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Settings", style = Typography.titleLarge.copy(color = TextPrimary)) },
@@ -204,7 +215,7 @@ fun SettingsScreen(
                                                 "Corrected ${drifts[0].account.name} by ${moneyString(drifts[0].difference)}"
                                             else -> "Corrected ${drifts.size} account balances"
                                         }
-                                        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+                                        notify(message)
                                     }
                                 },
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -451,7 +462,7 @@ fun SettingsScreen(
                         ) { uri ->
                             if (uri != null) {
                                 viewModel.importTransactionsFromCsv(uri, context)
-                                Toast.makeText(context, "Importing transactions...", Toast.LENGTH_SHORT).show()
+                                notify("Importing transactions…")
                             }
                         }
 
@@ -489,7 +500,7 @@ fun SettingsScreen(
                             onClick = { 
                                 val request = OneTimeWorkRequestBuilder<SyncWorker>().build()
                                 WorkManager.getInstance(context).enqueue(request)
-                                Toast.makeText(context, "Cloud sync started in background...", Toast.LENGTH_SHORT).show()
+                                notify("Cloud sync started in the background")
                             },
                             variant = iOSButtonVariant.Accent, accentColor = AccentGreen,
                             modifier = Modifier.fillMaxWidth()
@@ -563,9 +574,9 @@ fun SettingsScreen(
                                 val currentMonth = monthFormat.format(java.util.Date())
                                 val path = viewModel.exportMonthlyPdf(context, currentMonth)
                                 if (path != null) {
-                                    Toast.makeText(context, "PDF saved to: $path", Toast.LENGTH_LONG).show()
+                                    notify("PDF saved to $path")
                                 } else {
-                                    Toast.makeText(context, "Failed to generate PDF", Toast.LENGTH_SHORT).show()
+                                    notify("Couldn't generate the PDF")
                                 }
                             },
                             variant = iOSButtonVariant.Accent, accentColor = TextPrimary,
@@ -600,7 +611,7 @@ fun SettingsScreen(
             onConfirm = { pin ->
                 viewModel.setSecurityPin(pin)
                 showPinDialog = false
-                Toast.makeText(context, "PIN saved", Toast.LENGTH_SHORT).show()
+                notify("PIN saved")
             }
         )
     }
@@ -923,10 +934,10 @@ fun SettingsScreen(
                                 context = context,
                                 uri = uri,
                                 onSuccess = {
-                                    Toast.makeText(context, "Backup restored successfully!", Toast.LENGTH_SHORT).show()
+                                    notify("Backup restored")
                                 },
                                 onError = { err ->
-                                    Toast.makeText(context, "Restore failed: $err", Toast.LENGTH_LONG).show()
+                                    notify("Restore failed: $err")
                                 }
                             )
                         }

@@ -138,4 +138,50 @@ class SmsParserTest {
 
         assertNull(parsed)
     }
+
+    @Test
+    fun ignoresMarketingMessageWithBankingContext() {
+        val parsed = SmsParser.parse(
+            sender = "VM-HDFCBN",
+            message = "Prashant, Swipe & Win Rs.250 Amazon voucher when you spend Rs.1000 " +
+                "in the next 2 days on your HDFC Bank Debit Card. Click hdfcbk.io/example T&C"
+        )
+
+        assertNull(parsed)
+    }
+
+    @Test
+    fun ignoresWalletGamingBonus() {
+        val parsed = SmsParser.parse(
+            sender = "BP-iPAYTM",
+            message = "Rs 15 has been credited into your Paytm First Games Bonus Account. " +
+                "Use it to play and win Paytm Cash. Click http://example.invalid"
+        )
+
+        assertNull(parsed)
+    }
+
+    @Test
+    fun keepsCompletedTransferWhenMerchantContainsMarketingWord() {
+        val parsed = SmsParser.parse(
+            sender = "AD-SBIUPI",
+            message = "Dear SBI User, your A/c X8914-debited by Rs175.0 transfer to DIMPLE WINES " +
+                "Ref No 235943395508. If not done by u, call 1800111109."
+        )
+
+        assertNotNull(parsed)
+        assertEquals("debit", parsed?.type)
+    }
+
+    @Test
+    fun keepsCashfreeTransferDespiteWordFree() {
+        val parsed = SmsParser.parse(
+            sender = "VK-SBIINB",
+            message = "Your a/c no. XXXXXXXX8914 is credited by Rs.1.00 on 30-11-21 " +
+                "by a/c linked to mobile 6XXXXXX977-Cashfree Private Li (IMPS Ref no 133414774032)."
+        )
+
+        assertNotNull(parsed)
+        assertEquals("credit", parsed?.type)
+    }
 }

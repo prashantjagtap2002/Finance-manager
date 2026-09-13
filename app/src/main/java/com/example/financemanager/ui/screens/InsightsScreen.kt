@@ -67,6 +67,7 @@ import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.iOSCardStyle
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
+import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.milliseconds
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -353,7 +354,18 @@ fun InsightsScreen(
     }
     val periodIsInFuture = rangeEnd > System.currentTimeMillis()
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
+
+    /** Transient confirmation that stays inside the app's own surface, unlike a toast. */
+    fun notify(message: String) {
+        snackbarScope.launch {
+            snackbarHostState.showSnackbar(message, withDismissAction = true)
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Reports & Insights", style = Typography.titleLarge.copy(color = TextPrimary)) },
@@ -372,9 +384,9 @@ fun InsightsScreen(
                     IconButton(onClick = {
                         val path = viewModel.exportTransactionsToCsv(context)
                         if (path != null) {
-                            Toast.makeText(context, "Exported: $path", Toast.LENGTH_LONG).show()
+                            notify("Exported to $path")
                         } else {
-                            Toast.makeText(context, "No transactions to export", Toast.LENGTH_SHORT).show()
+                            notify("Nothing to export for this period")
                         }
                     }) {
                         Icon(Icons.Default.FileDownload, contentDescription = "Export Report", tint = SecondaryTeal)

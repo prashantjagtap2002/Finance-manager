@@ -21,9 +21,11 @@ import com.example.financemanager.theme.TextPrimary
 /**
  * The single container primitive for the app.
  *
- * Cards are flat: one surface colour, one hairline border, one radius. Depth
- * comes from the border and the step in lightness against the canvas, never
- * from shadows — a drop shadow on a near-black background just reads as mud.
+ * One surface colour, one hairline border, one radius. How depth is signalled
+ * differs by theme, because the same move does not work in both: on a dark
+ * canvas the card steps up in lightness and a drop shadow would read as mud, so
+ * it stays flat; on a light canvas a white card needs a soft shadow to separate
+ * from the page at all.
  *
  * Styles:
  * - Plain: no chrome at all, for grouping without a visible box
@@ -54,7 +56,16 @@ fun iOSCard(
         // on a light one, so it is not the same move in both themes.
         iOSCardStyle.Elevated ->
             if (isDark) SubtleSurface to hairline
-            else surface to Color(0xFFD6DAE1)
+            else surface to hairline
+    }
+
+    // Light mode only: a shadow soft enough to lift the card without announcing
+    // itself. Plain draws no box, so it casts nothing either.
+    val shadow = when {
+        isDark -> 0.dp
+        style == iOSCardStyle.Plain -> 0.dp
+        style == iOSCardStyle.Elevated -> 4.dp
+        else -> 2.dp
     }
 
     Surface(
@@ -63,7 +74,7 @@ fun iOSCard(
         color = backgroundColor,
         contentColor = TextPrimary,
         tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
+        shadowElevation = shadow,
         border = if (borderColor == Color.Transparent) null else BorderStroke(1.dp, borderColor)
     ) {
         Column(content = content)

@@ -7,12 +7,9 @@ import androidx.work.WorkerParameters
 import com.example.financemanager.domain.AccountLedger
 import com.example.financemanager.data.*
 import com.example.financemanager.ui.components.moneyString
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.flow.first
 import java.util.Calendar
 
-@OptIn(DelicateCoroutinesApi::class)
 class RecurringTransactionWorker(
     appContext: Context,
     workerParams: WorkerParameters
@@ -21,7 +18,7 @@ class RecurringTransactionWorker(
     override suspend fun doWork(): Result {
         try {
             Log.d("RecurringWorker", "Starting auto-execution check...")
-            val db = FinanceDatabase.getDatabase(applicationContext, GlobalScope)
+            val db = FinanceDatabase.getDatabase(applicationContext)
             val dao = db.financeDao()
             
             // Get all recurring transactions

@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,6 +34,7 @@ import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.iOSCardStyle
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
+import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -51,6 +53,8 @@ fun BudgetScreen(
 ) {
     val categories by viewModel.categories.collectAsState()
     val transactions by viewModel.transactions.collectAsState()
+    val monthlyCategorySpend by viewModel.monthlyCategorySpend.collectAsState(initial = emptyMap())
+    val isPrivacy by viewModel.isPrivacyMode.collectAsState()
 
     // Zero-Based Budget Math
     val totalIncome = transactions
@@ -71,8 +75,11 @@ fun BudgetScreen(
     var editLimitInput by remember { mutableStateOf("") }
     
     val context = androidx.compose.ui.platform.LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("Budget Envelopes", style = Typography.titleLarge.copy(color = TextPrimary)) },
@@ -135,7 +142,7 @@ fun BudgetScreen(
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(
-                            "Zero-Based Budget Assistant",
+                            "Give every rupee a job",
                             style = Typography.titleMedium.copy(fontWeight = FontWeight.Bold, color = TextPrimary)
                         )
                         Spacer(modifier = Modifier.height(12.dp))
@@ -175,7 +182,7 @@ fun BudgetScreen(
                                         "${moneyString(leftToAssign)} left to assign",
                                         style = Typography.titleMedium.copy(color = WarningAmber, fontWeight = FontWeight.Bold)
                                     )
-                                    Text("Assign remaining income to envelopes to achieve a zero-based budget.", style = Typography.bodyMedium.copy(color = TextSecondary))
+                                    Text("Put the rest into envelopes so none of your income is unplanned.", style = Typography.bodyMedium.copy(color = TextSecondary))
                                 }
                             }
                         }
@@ -191,17 +198,18 @@ fun BudgetScreen(
                     iOSButton(
                         onClick = { showTransferDialog = true },
                         modifier = Modifier.weight(1f),
-                        variant = iOSButtonVariant.Accent,
-                        accentColor = PrimaryViolet
+                        variant = iOSButtonVariant.Outlined
                     ) {
                         Icon(Icons.Default.SwapHoriz, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Move Money")
+                        Text("Move money")
                     }
                     iOSButton(
-                        onClick = { 
+                        onClick = {
                             viewModel.stuffEnvelopesForNewCycle()
-                            android.widget.Toast.makeText(context, "Envelopes stuffed with leftover funds!", android.widget.Toast.LENGTH_SHORT).show()
+                            scope.launch {
+                                snackbarHostState.showSnackbar("Envelopes filled with leftover funds")
+                            }
                         },
                         modifier = Modifier.weight(1f),
                         variant = iOSButtonVariant.Accent,
@@ -209,7 +217,7 @@ fun BudgetScreen(
                     ) {
                         Icon(Icons.Default.AutoAwesome, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("Stuff Envelopes")
+                        Text("Fill envelopes")
                     }
                 }
             }
@@ -225,6 +233,12 @@ fun BudgetScreen(
                     val elevation = if (isDragging) 8.dp else 0.dp
                     
                     var menuExpanded by remember { mutableStateOf(false) }
+                    val envelopeLimit = category.budgetLimit + category.rolloverAmount
+                    val envelopeSpent = monthlyCategorySpend[category.id] ?: 0.0
+                    val envelopeRemaining = envelopeLimit - envelopeSpent
+                    val envelopeRatio = if (envelopeLimit > 0) {
+                        (envelopeSpent / envelopeLimit).toFloat().coerceIn(0f, 1f)
+                    } else 0f
                     
                     iOSCard(
                         style = iOSCardStyle.Grouped,
@@ -277,22 +291,44 @@ fun BudgetScreen(
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
-                            Column {
-                                Text(category.name, style = Typography.titleMedium.copy(color = TextPrimary))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    category.name,
+                                    style = Typography.titleMedium.copy(color = TextPrimary),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    "of ${moneyString(category.budgetLimit, isPrivacy)}",
+                                    style = Typography.labelMedium.copy(color = TextSecondary)
+                                )
                                 if (category.rolloverAmount > 0.0) {
-                                    Text("Rolled Over: ${moneyString(category.rolloverAmount)}", style = Typography.labelMedium.copy(color = AccentGreen))
+                                    Text("Rolled Over: ${moneyString(category.rolloverAmount, isPrivacy)}", style = Typography.labelMedium.copy(color = AccentGreen))
                                 }
                             }
                         }
                         
+                        Spacer(modifier = Modifier.width(12.dp))
+
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text(
-                                moneyString(category.budgetLimit),
-                                style = Typography.titleMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
-                            )
+                            // This screen used to show only the limit, so the envelope list you
+                            // open to think about budgets told you less than the home summary did.
+                            Column(horizontalAlignment = Alignment.End) {
+                                Text(
+                                    "${moneyString(envelopeRemaining, isPrivacy)} left",
+                                    style = Typography.titleMedium.copy(
+                                        color = if (envelopeRemaining >= 0) TextPrimary else AlertRed,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                )
+                                Text(
+                                    "Spent: ${moneyString(envelopeSpent, isPrivacy)}",
+                                    style = Typography.labelMedium.copy(color = TextSecondary)
+                                )
+                            }
                             
                             Box {
                                 IconButton(onClick = { menuExpanded = true }) {
@@ -331,6 +367,22 @@ fun BudgetScreen(
                                 }
                             }
                         }
+                    }
+                    if (envelopeLimit > 0) {
+                        LinearProgressIndicator(
+                            progress = { envelopeRatio },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, end = 16.dp, bottom = 16.dp)
+                                .height(6.dp)
+                                .clip(CircleShape),
+                            color = when {
+                                envelopeRatio >= 1f -> AlertRed
+                                envelopeRatio > 0.8f -> WarningAmber
+                                else -> AccentGreen
+                            },
+                            trackColor = SubtleSurface
+                        )
                     }
                 }
                 } // End ReorderableItem

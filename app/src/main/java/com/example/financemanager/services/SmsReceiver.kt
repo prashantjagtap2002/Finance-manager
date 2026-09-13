@@ -47,7 +47,7 @@ class SmsReceiver : BroadcastReceiver() {
 
         val smsHash = generateSmsHash(sender, messageBody, receivedAtMillis)
 
-        val db = FinanceDatabase.getDatabase(context.applicationContext, CoroutineScope(Dispatchers.IO))
+        val db = FinanceDatabase.getDatabase(context.applicationContext)
         val dao = db.financeDao()
 
         val insertedId = dao.insertSmsTransaction(

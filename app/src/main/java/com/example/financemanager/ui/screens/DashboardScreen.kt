@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -54,6 +56,7 @@ import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.iOSTopAppBar
 import com.example.financemanager.ui.components.iOSListSeparator
 import com.example.financemanager.theme.LocalThemeIsDark
+import com.example.financemanager.ui.components.EmptyState
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -67,9 +70,9 @@ fun DashboardScreen(
     onNavigateToQuickEntry: () -> Unit,
     onNavigateToBudget: () -> Unit,
     onNavigateToInsights: () -> Unit,
-    onNavigateToFinancialTools: () -> Unit = {},
     onNavigateToSettings: () -> Unit,
     onNavigateToLogs: () -> Unit,
+    onNavigateToAccountTransactions: (Long) -> Unit = {},
     onNavigateToSearch: () -> Unit,
     onNavigateToSubscriptions: () -> Unit = {},
     onNavigateToGoals: () -> Unit = {},
@@ -92,6 +95,9 @@ fun DashboardScreen(
     val safeToSpend by viewModel.safeToSpend.collectAsState(initial = 0.0)
     val badges by viewModel.unlockedBadges.collectAsState()
     val aiRecap by viewModel.aiRecapText.collectAsState()
+    // Read so the pace calculation below re-runs when the user changes their cycle settings.
+    val payCycleFrequency by viewModel.payCycleFrequency.collectAsState()
+    val payCycleAnchorDay by viewModel.payCycleAnchorDay.collectAsState()
 
     var editingTransaction by remember { mutableStateOf<Transaction?>(null) }
     var showInsightsSheet by remember { mutableStateOf(false) }
@@ -104,7 +110,27 @@ fun DashboardScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    val accountsListState = rememberLazyListState()
     val totalBalance = remember(accounts) { accounts.sumOf { it.balance } }
+
+    // "How much have I spent" is only half the question the home screen should answer. Comparing
+    // spend-so-far against how far the pay cycle has actually run turns the number into a verdict:
+    // being 80% through the budget is fine on day 25 and a problem on day 5.
+    val spendPace = remember(categories, monthlySpent, payCycleFrequency, payCycleAnchorDay) {
+        val budget = categories.sumOf { it.budgetLimit }.takeIf { it > 0.0 }
+        val (cycleStart, cycleEnd) = viewModel.currentPayCycleRange()
+        val now = System.currentTimeMillis()
+        val span = (cycleEnd - cycleStart).coerceAtLeast(1L)
+        val elapsed = ((now - cycleStart).toFloat() / span).coerceIn(0f, 1f)
+        val daysLeft = (((cycleEnd - now) / 86_400_000L) + 1).coerceAtLeast(0L)
+        SpendPace(
+            budget = budget,
+            spent = monthlySpent,
+            usedFraction = budget?.let { (monthlySpent / it).toFloat().coerceIn(0f, 1f) } ?: 0f,
+            elapsedFraction = elapsed,
+            daysLeft = daysLeft
+        )
+    }
     val accountNames = remember(accounts) { accounts.associateBy { it.id } }
     val categoryNames = remember(categories) { categories.associateBy { it.id } }
     val unverifiedTxs = remember(transactions) {
@@ -179,8 +205,12 @@ fun DashboardScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
-                .padding(horizontal = 16.dp),
+                .padding(paddingValues),
+            // The FAB floats over this list, so the scroll range has to end clear of it —
+            // otherwise the last rows scroll to rest underneath and their controls can't be
+            // reached at all. contentPadding extends the scroll range; a trailing Spacer would
+            // only pad the final item.
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             cashflowWarning?.let { warningMsg ->
@@ -299,6 +329,9 @@ fun DashboardScreen(
                             style = Typography.displayMedium.copy(color = TextPrimary)
                         )
 
+                        Spacer(modifier = Modifier.height(14.dp))
+                        SpendPaceBar(pace = spendPace, privacy = isPrivacy)
+
                         Spacer(modifier = Modifier.height(18.dp))
                         HorizontalDivider(color = BorderColor, thickness = 1.dp)
                         Spacer(modifier = Modifier.height(14.dp))
@@ -399,30 +432,10 @@ fun DashboardScreen(
             }
 
             // AI Recap Card
-            if ("intelligence" in dashboardSections) item {
-                iOSCard(
-                    modifier = Modifier.fillMaxWidth().clickable { onNavigateToFinancialTools() },
-                    style = iOSCardStyle.Grouped
-                ) {
-                    Row(
-                        modifier = Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Icon(Icons.Default.Insights, contentDescription = null, tint = SecondaryTeal)
-                        Column(Modifier.weight(1f)) {
-                            Text("Financial Intelligence", style = Typography.titleMedium.copy(color = TextPrimary))
-                            Text("Health score, what-if plans, merchants & calendar", style = Typography.bodySmall.copy(color = TextSecondary))
-                        }
-                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
-                    }
-                }
-            }
-
             aiRecap?.let { text ->
                 if ("intelligence" in dashboardSections) item {
                     iOSCard(
-                        modifier = Modifier.fillMaxWidth().clickable { onNavigateToFinancialTools() },
+                        modifier = Modifier.fillMaxWidth(),
                         style = iOSCardStyle.Grouped
                     ) {
                         Row(
@@ -583,10 +596,22 @@ fun DashboardScreen(
                     SectionHeader("Accounts")
                     Spacer(modifier = Modifier.height(10.dp))
                     LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        // Without a trailing inset the row stopped dead at the column's padding,
+                        // slicing the next card through the middle of a word. A resting card now
+                        // ends clear of the edge, and the peek reads as "more this way".
+                        contentPadding = PaddingValues(end = 8.dp),
+                        flingBehavior = rememberSnapFlingBehavior(lazyListState = accountsListState),
+                        state = accountsListState
                     ) {
                         items(accounts, key = { it.id }) { account ->
-                            AccountCard(account, isPrivacy, modifier = Modifier.animateItem())
+                            AccountCard(
+                                account,
+                                isPrivacy,
+                                modifier = Modifier
+                                    .animateItem(),
+                                onClick = { onNavigateToAccountTransactions(account.id) }
+                            )
                         }
                     }
                 }
@@ -627,14 +652,14 @@ fun DashboardScreen(
 
             if ("transactions" in dashboardSections && transactions.isEmpty()) {
                 item {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 32.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("No transactions logged yet.", style = Typography.bodyMedium.copy(color = TextMuted))
-                    }
+                    EmptyState(
+                        icon = Icons.Default.ReceiptLong,
+                        title = "No transactions yet",
+                        message = "Log one by hand, or let the app read your bank SMS alerts and suggest them for you.",
+                        accent = SecondaryTeal,
+                        actionLabel = "Log a transaction",
+                        onAction = onNavigateToQuickEntry
+                    )
                 }
             }
 
@@ -652,10 +677,6 @@ fun DashboardScreen(
                 )
             }
 
-            // Padding at bottom
-            item {
-                Spacer(modifier = Modifier.height(64.dp))
-            }
         }
     }
 
@@ -667,7 +688,7 @@ fun DashboardScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Choose the sections you want to see.", color = TextSecondary)
-                            listOf("accounts" to "Accounts", "budgets" to "Envelope budgets", "transactions" to "Recent transactions", "intelligence" to "Financial intelligence").forEach { (key, label) ->
+                            listOf("accounts" to "Accounts", "budgets" to "Envelope budgets", "transactions" to "Recent transactions", "intelligence" to "AI recap").forEach { (key, label) ->
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
                             dashboardSections = if (key in dashboardSections) dashboardSections - key else dashboardSections + key
                         }) {
@@ -970,7 +991,12 @@ private fun SectionAction(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-fun AccountCard(account: Account, privacy: Boolean = FinancePreferences.privacyMode, modifier: Modifier = Modifier) {
+fun AccountCard(
+    account: Account,
+    privacy: Boolean = FinancePreferences.privacyMode,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit = {}
+) {
     val accent = when (account.type) {
         com.example.financemanager.data.AccountType.BANK -> SecondaryTeal
         com.example.financemanager.data.AccountType.CASH -> AccentGreen
@@ -987,6 +1013,7 @@ fun AccountCard(account: Account, privacy: Boolean = FinancePreferences.privacyM
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .clickable(onClick = onClick)
                 .background(DarkSurface)
         ) {
             Column(
@@ -1052,6 +1079,8 @@ fun EnvelopeProgressItem(
         label = "envelopeRatio"
     )
 
+    var menuExpanded by remember { mutableStateOf(false) }
+
     iOSCard(
         modifier = modifier.fillMaxWidth()
     ) {
@@ -1108,14 +1137,49 @@ fun EnvelopeProgressItem(
                     }
 
                     Spacer(modifier = Modifier.width(4.dp))
-                    IconButton(onClick = { onEdit(category) }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit Limit", tint = SecondaryTeal, modifier = Modifier.size(16.dp))
-                    }
-                    IconButton(onClick = { onUpdateRollover(category) }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.Autorenew, contentDescription = "Update Rollover", tint = AccentGreen, modifier = Modifier.size(16.dp))
-                    }
-                    IconButton(onClick = { onDelete(category) }, modifier = Modifier.size(28.dp)) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete Envelope", tint = AlertRed, modifier = Modifier.size(16.dp))
+                    // Three 28dp buttons used to sit here, with a destructive delete 4dp from the
+                    // edit pencil — under Material's 48dp minimum, and close enough that a thumb
+                    // could delete an envelope while reaching for its limit. The Budget screen
+                    // already resolves the same three actions through one menu; this matches it.
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = "Envelope options",
+                                tint = TextSecondary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                            modifier = Modifier.background(DarkSurface)
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Edit Envelope", color = SecondaryTeal) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onEdit(category)
+                                },
+                                leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = SecondaryTeal) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Update Rollover", color = AccentGreen) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onUpdateRollover(category)
+                                },
+                                leadingIcon = { Icon(Icons.Default.Autorenew, contentDescription = null, tint = AccentGreen) }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("Delete Envelope", color = AlertRed) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onDelete(category)
+                                },
+                                leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = AlertRed) }
+                            )
+                        }
                     }
                 }
             }
@@ -1130,6 +1194,99 @@ fun EnvelopeProgressItem(
                 trackColor = BorderColor
             )
         }
+    }
+}
+
+/** Spend so far measured against how much of the pay cycle has actually elapsed. */
+private data class SpendPace(
+    /** Total assigned across envelopes, or null when the user hasn't budgeted yet. */
+    val budget: Double?,
+    val spent: Double,
+    /** Share of the budget already spent, 0..1. */
+    val usedFraction: Float,
+    /** Share of the pay cycle already elapsed, 0..1. */
+    val elapsedFraction: Float,
+    val daysLeft: Long
+) {
+    val remaining: Double get() = (budget ?: 0.0) - spent
+    /** Spending faster than the cycle is passing, with enough margin to not nag on day one. */
+    val isOverPace: Boolean get() = budget != null && usedFraction > elapsedFraction + 0.05f
+    val isOverBudget: Boolean get() = budget != null && spent > budget
+}
+
+/**
+ * The one line that turns a number into a verdict.
+ *
+ * The fill is how much of the budget is gone; the notch is how far through the cycle today sits.
+ * Fill behind the notch means there is room, fill past it means the money is going faster than
+ * the days are. That comparison is the whole point — an amount on its own can't say whether it's
+ * a problem, because 80% spent is fine on day 25 and alarming on day 5.
+ */
+@Composable
+private fun SpendPaceBar(pace: SpendPace, privacy: Boolean) {
+    val budget = pace.budget
+    val barColor = when {
+        budget == null -> TextMuted
+        pace.isOverBudget -> AlertRed
+        pace.isOverPace -> WarningAmber
+        else -> AccentGreen
+    }
+    val animatedUsed by animateFloatAsState(
+        targetValue = pace.usedFraction,
+        animationSpec = tween(durationMillis = 800, easing = EaseOutCubic),
+        label = "spendPace"
+    )
+
+    Column {
+        if (budget != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(8.dp)
+                    .clip(CircleShape)
+                    .background(SubtleSurface)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(animatedUsed)
+                        .fillMaxHeight()
+                        .clip(CircleShape)
+                        .background(barColor)
+                )
+                // A zero-width column ending exactly at today, carrying the notch on its edge.
+                Box(modifier = Modifier.fillMaxWidth(pace.elapsedFraction).fillMaxHeight()) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .width(2.dp)
+                            .fillMaxHeight()
+                            .background(TextPrimary)
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        val daysText = when (pace.daysLeft) {
+            0L -> "last day of this cycle"
+            1L -> "1 day to go"
+            else -> "${pace.daysLeft} days to go"
+        }
+        val message = when {
+            budget == null -> "Set envelope budgets to track your pace · $daysText"
+            pace.isOverBudget ->
+                "${moneyString(-pace.remaining, privacy, decimals = 0)} over budget · $daysText"
+            pace.isOverPace ->
+                "${moneyString(pace.remaining, privacy, decimals = 0)} left, spending ahead of pace · $daysText"
+            else ->
+                "${moneyString(pace.remaining, privacy, decimals = 0)} left and on track · $daysText"
+        }
+        Text(
+            message,
+            style = Typography.labelMedium.copy(color = if (budget == null) TextMuted else barColor),
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

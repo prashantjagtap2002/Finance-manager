@@ -13,6 +13,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -83,10 +84,16 @@ fun InvestmentsScreen(
         },
         containerColor = DeepBackground
     ) { paddingValues ->
+        // Prices are the one thing on this screen that goes stale on its own, so the gesture
+        // people already reach for should fetch them — the toolbar button stays for discoverability.
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = { viewModel.refreshAllPrices() },
+            modifier = Modifier.padding(paddingValues)
+        ) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -146,6 +153,7 @@ fun InvestmentsScreen(
             }
 
             item { Spacer(modifier = Modifier.height(48.dp)) }
+        }
         }
     }
 

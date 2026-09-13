@@ -13,7 +13,35 @@ data class ParsedSms(
 
 object SmsParser {
 
+    /**
+     * Returns true only for messages that contain strong marketing signals without the
+     * identity of a completed banking transaction. Words such as "win" and "free" are
+     * deliberately matched as whole words: they occur in perfectly valid alerts such as
+     * merchant names ("DIMPLE WINES") and "Cashfree".
+     */
+    fun isPromotionalMessage(message: String): Boolean {
+        val promoSignal = Regex(
+            "\\b(?:cashback|cash back|voucher|coupon|discount|offer|reward|bonus|prize|winner|" +
+                "spin\\s*(?:&|and)\\s*win|credit card points?|points? worth|welcome offer|" +
+                "shop now|apply now|use code|request (?:a|your) .*?card|terms? and conditions|t&c)\\b|" +
+                "\\b(?:click|redeem)\\b.*https?://",
+            RegexOption.IGNORE_CASE
+        )
+        if (!promoSignal.containsMatchIn(message)) return false
+
+        // A reference/UTR/RRN alongside a completed debit/credit is a transaction alert even
+        // when the counterparty or bank template happens to contain a marketing-looking word.
+        val completedTransaction = Regex(
+            "\\b(?:debited|credited|received|sent|paid|spent|withdrawn|deposited)\\b[\\s\\S]{0,220}" +
+                "\\b(?:ref(?:erence)?(?:\\s*(?:no|number|id))?|utr|rrn|txn(?:\\s*id)?)\\b[\\s:#-]*[A-Za-z0-9]{4,}",
+            RegexOption.IGNORE_CASE
+        ).containsMatchIn(message)
+        return !completedTransaction
+    }
+
     fun parse(sender: String, message: String): ParsedSms? {
+        if (isPromotionalMessage(message)) return null
+
         var accountName = ""
         var type = ""
         var amount = ""

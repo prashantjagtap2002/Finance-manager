@@ -86,7 +86,17 @@ data class Category(
     val displayOrder: Int = 0
 )
 
-@Entity(tableName = "transactions")
+@Entity(
+    tableName = "transactions",
+    // Every list and aggregate query filters or orders on these, and the table is the one that
+    // grows without bound. Without them SQLite scans the whole table for each.
+    indices = [
+        Index(value = ["date"]),
+        Index(value = ["categoryId"]),
+        Index(value = ["sourceAccountId"]),
+        Index(value = ["destinationAccountId"])
+    ]
+)
 data class Transaction(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val amount: Double,
@@ -134,7 +144,7 @@ data class RecurringTransaction(
     val isPaused: Boolean = false
 )
 
-@Entity(tableName = "debts")
+@Entity(tableName = "debts", indices = [Index(value = ["date"])])
 data class Debt(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val personName: String,
@@ -149,7 +159,14 @@ data class Debt(
     val minimumPayment: Double? = null
 )
 
-@Entity(tableName = "sms_transactions", indices = [Index(value = ["smsHash"], unique = true)])
+@Entity(
+    tableName = "sms_transactions",
+    indices = [
+        Index(value = ["smsHash"], unique = true),
+        // Every inbox list orders by this, and a historical XML import can leave thousands of rows.
+        Index(value = ["rawTimestamp"])
+    ]
+)
 data class SmsTransaction(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val smsHash: String,
@@ -192,7 +209,7 @@ data class Investment(
     val notes: String = ""
 )
 
-@Entity(tableName = "investment_transactions")
+@Entity(tableName = "investment_transactions", indices = [Index(value = ["investmentId"])])
 data class InvestmentTransaction(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val investmentId: Long,

@@ -69,7 +69,7 @@ class FinanceWidgetProvider : AppWidgetProvider() {
         // Query database in background
         widgetScope.launch {
             try {
-                val db = FinanceDatabase.getDatabase(context, this)
+                val db = FinanceDatabase.getDatabase(context)
                 val dao = db.financeDao()
 
                 // Calculate today's start and end bounds

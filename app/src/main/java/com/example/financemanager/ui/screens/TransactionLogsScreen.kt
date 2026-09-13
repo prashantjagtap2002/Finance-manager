@@ -26,18 +26,25 @@ import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.iOSButton
 import com.example.financemanager.ui.components.iOSButtonVariant
 import com.example.financemanager.ui.components.moneyString
+import com.example.financemanager.ui.components.EmptyState
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import com.example.financemanager.domain.NlpParser
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+
+/** How many rows are added each time the list is scrolled to the end. */
+private const val LOGS_PAGE_SIZE = 60
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TransactionLogsScreen(
     viewModel: FinanceViewModel,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    initialAccountId: Long? = null
 ) {
     val transactions by viewModel.transactions.collectAsState()
     val categories by viewModel.categories.collectAsState()
@@ -46,7 +53,9 @@ fun TransactionLogsScreen(
 
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategoryId by remember { mutableStateOf<Long?>(null) }
+    var selectedAccountId by remember { mutableStateOf(initialAccountId) }
     var showCategoryFilterMenu by remember { mutableStateOf(false) }
+    var showAccountFilterMenu by remember { mutableStateOf(false) }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -74,23 +83,51 @@ fun TransactionLogsScreen(
         else null
     }
 
-    val filteredTransactions = remember(transactions, searchQuery, selectedCategoryId, nlpResult, categories) {
-        transactions.filter { transaction ->
-            val textMatch = transaction.note.contains(searchQuery, ignoreCase = true) ||
-                    (transaction.merchantName?.contains(searchQuery, ignoreCase = true) == true)
+    // Filtering scans the whole table, and it re-ran on the main thread for every keystroke.
+    // produceState keeps the previously computed list on screen while the next one is worked out
+    // off-thread, so typing neither janks nor blinks the list empty.
+    val filteredTransactions by produceState(
+        initialValue = emptyList<Transaction>(),
+        transactions, searchQuery, selectedCategoryId, selectedAccountId, nlpResult, categories
+    ) {
+        value = withContext(Dispatchers.Default) {
+            transactions.filter { transaction ->
+                val textMatch = transaction.note.contains(searchQuery, ignoreCase = true) ||
+                        (transaction.merchantName?.contains(searchQuery, ignoreCase = true) == true)
             
-            val nlpMatch = if (nlpResult != null && (nlpResult.amount != null || nlpResult.categoryName != null)) {
-                val amountMatches = if (nlpResult.amount != null) transaction.amount >= nlpResult.amount * 0.9 && transaction.amount <= nlpResult.amount * 1.1 else true
-                val catMatches = if (nlpResult.categoryName != null) {
-                    val catId = categories.firstOrNull { it.name == nlpResult.categoryName }?.id
-                    transaction.categoryId == catId
-                } else true
-                amountMatches && catMatches
-            } else false
+                val nlpMatch = if (nlpResult != null && (nlpResult.amount != null || nlpResult.categoryName != null)) {
+                    val amountMatches = if (nlpResult.amount != null) transaction.amount >= nlpResult.amount * 0.9 && transaction.amount <= nlpResult.amount * 1.1 else true
+                    val catMatches = if (nlpResult.categoryName != null) {
+                        val catId = categories.firstOrNull { it.name == nlpResult.categoryName }?.id
+                        transaction.categoryId == catId
+                    } else true
+                    amountMatches && catMatches
+                } else false
 
-            val categoryMatches = selectedCategoryId == null || transaction.categoryId == selectedCategoryId
-            (textMatch || nlpMatch) && categoryMatches
+                val categoryMatches = selectedCategoryId == null || transaction.categoryId == selectedCategoryId
+                val accountMatches = selectedAccountId == null ||
+                        transaction.sourceAccountId == selectedAccountId ||
+                        transaction.destinationAccountId == selectedAccountId
+                (textMatch || nlpMatch) && categoryMatches && accountMatches
+            }
         }
+    }
+
+    // The list is rendered a window at a time and grows as the user reaches the bottom. A history
+    // built from an SMS import can run to tens of thousands of rows, and there is no reason to
+    // hand all of them to the lazy list — or to build a dismiss state for each — to show a screenful.
+    var visibleCount by remember { mutableStateOf(LOGS_PAGE_SIZE) }
+    // Any change to the filters starts the window over at the top.
+    LaunchedEffect(searchQuery, selectedCategoryId, selectedAccountId, nlpResult) {
+        visibleCount = LOGS_PAGE_SIZE
+    }
+    val visibleTransactions = remember(filteredTransactions, visibleCount) {
+        if (filteredTransactions.size <= visibleCount) filteredTransactions
+        else filteredTransactions.take(visibleCount)
+    }
+
+    val bankAccounts = remember(accounts) {
+        accounts.filter { it.type == AccountType.BANK }.sortedBy { it.name.lowercase() }
     }
 
     Scaffold(
@@ -107,9 +144,9 @@ fun TransactionLogsScreen(
                         onClick = {
                             val path = viewModel.exportTransactionsToCsv(context)
                             if (path != null) {
-                                Toast.makeText(context, "Exported: $path", Toast.LENGTH_LONG).show()
+                                scope.launch { snackbarHostState.showSnackbar("Exported to $path", withDismissAction = true) }
                             } else {
-                                Toast.makeText(context, "No transactions to export", Toast.LENGTH_SHORT).show()
+                                scope.launch { snackbarHostState.showSnackbar("Nothing to export", withDismissAction = true) }
                             }
                         }
                     ) {
@@ -193,6 +230,46 @@ fun TransactionLogsScreen(
                         }
                     }
                 }
+
+                Box {
+                    IconButton(
+                        onClick = { showAccountFilterMenu = true },
+                        modifier = Modifier
+                            .size(52.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(DarkSurface)
+                            .border(1.dp, BorderColor, RoundedCornerShape(12.dp))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.AccountBalance,
+                            contentDescription = "Filter by bank",
+                            tint = if (selectedAccountId != null) SecondaryTeal else TextPrimary
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showAccountFilterMenu,
+                        onDismissRequest = { showAccountFilterMenu = false },
+                        modifier = Modifier.background(DarkSurface)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("All Banks", color = TextPrimary) },
+                            onClick = {
+                                selectedAccountId = null
+                                showAccountFilterMenu = false
+                            }
+                        )
+                        bankAccounts.forEach { account ->
+                            DropdownMenuItem(
+                                text = { Text(account.name, color = TextPrimary) },
+                                onClick = {
+                                    selectedAccountId = account.id
+                                    showAccountFilterMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -204,18 +281,24 @@ fun TransactionLogsScreen(
             ) {
                 if (filteredTransactions.isEmpty()) {
                     item {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 48.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("No transactions match search criteria.", style = Typography.bodyMedium.copy(color = TextMuted))
-                        }
+                        EmptyState(
+                            icon = Icons.Default.SearchOff,
+                            title = if (transactions.isEmpty()) "No transactions yet"
+                                    else "Nothing matches",
+                            message = when {
+                                transactions.isEmpty() ->
+                                    "Logged transactions will show up here, newest first."
+                                selectedAccountId != null ->
+                                    "This account has nothing in the current filter. Try clearing the bank filter."
+                                else ->
+                                    "Try a shorter search, or clear the filters above."
+                            },
+                            accent = SecondaryTeal
+                        )
                     }
                 }
 
-                items(filteredTransactions, key = { it.id }) { transaction ->
+                items(visibleTransactions, key = { it.id }) { transaction ->
                     val accountName = accounts.firstOrNull { it.id == transaction.sourceAccountId }?.name ?: "Account"
                     val category = categories.firstOrNull { it.id == transaction.categoryId }
                     val categoryName = category?.name ?: "Income/Transfer"
@@ -243,6 +326,26 @@ fun TransactionLogsScreen(
                             onEditClick = { editingTransaction = transaction },
                             onDeleteClick = { pendingDelete = transaction }
                         )
+                    }
+                }
+
+                // Reaching the sentinel means the user scrolled to the end of the window, so the
+                // next slice is appended in place rather than up front.
+                if (visibleTransactions.size < filteredTransactions.size) {
+                    item {
+                        LaunchedEffect(visibleTransactions.size) {
+                            visibleCount += LOGS_PAGE_SIZE
+                        }
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = TextMuted
+                            )
+                        }
                     }
                 }
             }

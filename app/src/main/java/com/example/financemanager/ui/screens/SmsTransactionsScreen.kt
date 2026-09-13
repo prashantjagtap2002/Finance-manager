@@ -13,6 +13,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -24,8 +26,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -34,18 +40,21 @@ import com.example.financemanager.data.Account
 import com.example.financemanager.data.Category
 import com.example.financemanager.data.SmsTransaction
 import com.example.financemanager.data.Debt
+import com.example.financemanager.data.DebtType
 import com.example.financemanager.data.TransactionType
 import com.example.financemanager.domain.RESOLUTION_REVERSAL
 import com.example.financemanager.domain.RESOLUTION_TRANSFER
 import com.example.financemanager.domain.SmsLink
 import com.example.financemanager.domain.SmsLinkKind
 import com.example.financemanager.theme.*
+import com.example.financemanager.ui.components.EmptyState
 import com.example.financemanager.ui.components.iOSButton
 import com.example.financemanager.ui.components.iOSButtonVariant
 import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import com.example.financemanager.domain.SmsAmountFormatter
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -76,6 +85,23 @@ fun SmsTransactionsScreen(
     val debts by viewModel.debts.collectAsState()
     val context = LocalContext.current
 
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+
+    /** Confirmation that can be taken back. Toasts can't carry an action, so these are snackbars. */
+    fun notify(message: String, undoLabel: String? = null, onUndo: (() -> Unit)? = null) {
+        scope.launch {
+            val result = snackbarHostState.showSnackbar(
+                message = message,
+                actionLabel = undoLabel,
+                withDismissAction = undoLabel == null,
+                duration = SnackbarDuration.Short
+            )
+            if (result == SnackbarResult.ActionPerformed) onUndo?.invoke()
+        }
+    }
+
     var showApproveDialog by remember { mutableStateOf<SmsTransaction?>(null) }
     var showTransferDialog by remember { mutableStateOf<SmsLink?>(null) }
     var selectedCategoryId by remember { mutableStateOf<Long>(0L) }
@@ -105,10 +131,10 @@ fun SmsTransactionsScreen(
 
                 if (looksLikeXml) {
                     viewModel.importSmsXmlHistorical(context, uri)
-                    Toast.makeText(context, "Importing SMS history…", Toast.LENGTH_SHORT).show()
+                    notify("Importing SMS history…")
                 } else {
                     viewModel.importSmsJson(context, uri)
-                    Toast.makeText(context, "Importing SMS data...", Toast.LENGTH_SHORT).show()
+                    notify("Importing SMS data…")
                 }
             }
         }
@@ -116,7 +142,7 @@ fun SmsTransactionsScreen(
     val historicalImportResult by viewModel.historicalImportResult.collectAsState()
     LaunchedEffect(historicalImportResult) {
         historicalImportResult?.let { message ->
-            Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+            notify(message)
             viewModel.clearHistoricalImportResult()
         }
     }
@@ -125,7 +151,7 @@ fun SmsTransactionsScreen(
     ) { granted ->
         smsPermissionGranted = granted
         if (!granted) {
-            Toast.makeText(context, "SMS permission is needed for automatic capture", Toast.LENGTH_SHORT).show()
+            notify("SMS permission is needed for automatic capture")
         }
     }
 
@@ -137,6 +163,7 @@ fun SmsTransactionsScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -273,11 +300,7 @@ fun SmsTransactionsScreen(
                             onLogAsTransfer = { showTransferDialog = link },
                             onCancelOut = {
                                 viewModel.resolveSmsLinkAsReversal(link)
-                                Toast.makeText(
-                                    context,
-                                    "Cancelled out — nothing counted as spending",
-                                    Toast.LENGTH_SHORT
-                                ).show()
+                                notify("Cancelled out — nothing counted as spending")
                             },
                             onDismiss = { viewModel.dismissSmsLink(link) }
                         )
@@ -286,19 +309,28 @@ fun SmsTransactionsScreen(
 
                 if (visibleTransactions.isEmpty()) {
                     item {
-                        iOSCard(modifier = Modifier.fillMaxWidth()) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    "No items in ${selectedFilter.label.lowercase()} right now.",
-                                    style = Typography.bodyMedium.copy(color = TextSecondary)
-                                )
-                            }
-                        }
+                        // Each tab means something different when it's empty: an empty Pending
+                        // list is the goal, an empty Approved list just means nothing logged yet.
+                        EmptyState(
+                            icon = when (selectedFilter) {
+                                SmsFilter.PENDING -> Icons.Default.DoneAll
+                                SmsFilter.IGNORED -> Icons.Default.VisibilityOff
+                                else -> Icons.Default.Sms
+                            },
+                            title = when (selectedFilter) {
+                                SmsFilter.PENDING -> "All caught up"
+                                SmsFilter.APPROVED -> "Nothing approved yet"
+                                SmsFilter.IGNORED -> "Nothing ignored"
+                                SmsFilter.ALL -> "No bank alerts yet"
+                            },
+                            message = when (selectedFilter) {
+                                SmsFilter.PENDING -> "Every bank alert has been dealt with. New ones show up here automatically."
+                                SmsFilter.APPROVED -> "Alerts you approve get logged as transactions and listed here."
+                                SmsFilter.IGNORED -> "Alerts you dismiss are kept here in case you change your mind."
+                                SmsFilter.ALL -> "Bank SMS alerts are read on your device and turned into suggestions here."
+                            },
+                            accent = if (selectedFilter == SmsFilter.PENDING) AccentGreen else SecondaryTeal
+                        )
                     }
                 } else {
                     items(visibleTransactions, key = { it.id }) { tx ->
@@ -320,7 +352,13 @@ fun SmsTransactionsScreen(
                                 approveNote = ""
                                 showApproveDialog = tx
                             },
-                            onIgnore = { viewModel.ignoreSmsTransaction(tx) },
+                            onIgnore = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                viewModel.ignoreSmsTransaction(tx)
+                                notify("Alert ignored", "Undo") {
+                                    viewModel.unignoreSmsTransaction(tx)
+                                }
+                            },
                             onRestore = { viewModel.unignoreSmsTransaction(tx) },
                             onDelete = { viewModel.deleteSmsTransaction(tx) }
                         )
@@ -339,7 +377,7 @@ fun SmsTransactionsScreen(
             onConfirm = { fromId, toId, note ->
                 viewModel.resolveSmsLinkAsTransfer(link, fromId, toId, note)
                 showTransferDialog = null
-                Toast.makeText(context, "Logged as one transfer", Toast.LENGTH_SHORT).show()
+                notify("Logged as one transfer")
             },
             onDismiss = { showTransferDialog = null }
         )
@@ -362,9 +400,10 @@ fun SmsTransactionsScreen(
                 if (selectedAccountId > 0 && selectedCategoryId > 0) {
                     viewModel.approveSmsTransaction(tx, selectedCategoryId, selectedAccountId, approveNote, txTypeOverride)
                     showApproveDialog = null
-                    Toast.makeText(context, "Transaction approved!", Toast.LENGTH_SHORT).show()
+                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                    notify("Transaction logged")
                 } else {
-                    Toast.makeText(context, "Please select account and envelope budget", Toast.LENGTH_SHORT).show()
+                    notify("Pick an account and an envelope first")
                 }
             },
             onConfirmDebt = { debt, paymentAmount ->
@@ -372,9 +411,20 @@ fun SmsTransactionsScreen(
                 if (account != null) {
                     viewModel.approveSmsAsDebtPayment(tx, debt, paymentAmount, account)
                     showApproveDialog = null
-                    Toast.makeText(context, "IOU settlement approved!", Toast.LENGTH_SHORT).show()
+                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                    notify("IOU settled and payment logged")
                 } else {
-                    Toast.makeText(context, "Please select an account", Toast.LENGTH_SHORT).show()
+                    notify("Pick an account first")
+                }
+            },
+            onCreateIou = { personName, amount, iouNote ->
+                if (selectedAccountId > 0 && personName.isNotBlank() && amount > 0.0) {
+                    viewModel.createIouFromSms(tx, selectedAccountId, personName, amount, iouNote)
+                    showApproveDialog = null
+                    haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                    notify("IOU created and transaction logged")
+                } else {
+                    notify("Pick an account and person, and enter a valid amount")
                 }
             },
             onDismiss = { showApproveDialog = null }
@@ -810,38 +860,58 @@ private fun approveFieldColors() = OutlinedTextFieldDefaults.colors(
     cursorColor = SecondaryTeal
 )
 
+/**
+ * Equal-width tabs inside a pill. Every segment gets the same slot, so a long label is kept on
+ * one line with an icon above it rather than wrapping and clipping against its neighbour.
+ */
 @Composable
 private fun SegmentedToggle(
     options: List<String>,
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
     selectedColors: List<Color>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    icons: List<ImageVector> = emptyList()
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .background(DeepBackground, RoundedCornerShape(14.dp))
-            .padding(4.dp)
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         options.forEachIndexed { index, label ->
             val isSelected = index == selectedIndex
             val color = selectedColors.getOrElse(index) { TextPrimary }
-            Box(
+            val contentColor = if (isSelected) color else TextSecondary
+            Column(
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (isSelected) color.copy(alpha = 0.16f) else Color.Transparent)
                     .clickable { onSelect(index) }
-                    .padding(vertical = 9.dp),
-                contentAlignment = Alignment.Center
+                    .padding(vertical = 8.dp, horizontal = 4.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
+                icons.getOrNull(index)?.let { icon ->
+                    Icon(
+                        icon,
+                        contentDescription = null,
+                        tint = contentColor,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
                 Text(
                     label,
                     style = Typography.labelMedium.copy(
-                        color = if (isSelected) color else TextSecondary,
+                        color = contentColor,
                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                    )
+                    ),
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center
                 )
             }
         }
@@ -864,16 +934,23 @@ private fun ApproveSmsDialog(
     onNoteChange: (String) -> Unit,
     onConfirmStandard: (TransactionType?) -> Unit,
     onConfirmDebt: (Debt, Double) -> Unit,
+    onCreateIou: (String, Double, String) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var isSettleIou by remember { mutableStateOf(false) }
+    var mode by remember { mutableStateOf(0) } // 0 = standard, 1 = settle, 2 = create
+    var validationError by remember { mutableStateOf<String?>(null) }
     var accountExpanded by remember { mutableStateOf(false) }
     var categoryExpanded by remember { mutableStateOf(false) }
     var debtExpanded by remember { mutableStateOf(false) }
 
-    val activeDebts = debts.filter { !it.isSettled }
+    // A credit is normally money coming back from somebody who owes the user; a debit is
+    // normally repayment of money the user borrowed. Keep unrelated IOUs out of the picker.
+    val settleType = if (tx.type == "credit") DebtType.LENT else DebtType.BORROWED
+    val activeDebts = debts.filter { !it.isSettled && it.type == settleType }
     val parsedAmountStr = SmsAmountFormatter.number(tx.amount)
     var settleAmountStr by remember { mutableStateOf(parsedAmountStr) }
+    var iouPersonName by remember { mutableStateOf(tx.counterparty.ifEmpty { tx.sender }) }
+    var iouAmountStr by remember { mutableStateOf(parsedAmountStr) }
     var selectedDebtId by remember { mutableStateOf<Long>(activeDebts.firstOrNull()?.id ?: 0L) }
     var currentTxType by remember { mutableStateOf(if (tx.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE) }
 
@@ -886,54 +963,89 @@ private fun ApproveSmsDialog(
     val fieldColors = approveFieldColors()
     val directionColor = if (currentTxType == TransactionType.INCOME) AccentGreen else AlertRed
     val bankInitial = tx.accountName.firstOrNull()?.uppercaseChar() ?: '?'
+    val modeTitle = when (mode) {
+        1 -> "Settle an IOU"
+        2 -> "Create an IOU"
+        else -> "Review transaction"
+    }
+    val modeSubtitle = when (mode) {
+        1 -> "Use this payment to reduce an existing IOU"
+        2 -> if (tx.type == "credit") {
+            "This money will be recorded as borrowed"
+        } else {
+            "This payment will be recorded as money lent"
+        }
+        else -> if (tx.type == "credit") "Money received · check the account and envelope" else "Money sent · check the account and envelope"
+    }
+    val actionLabel = when (mode) {
+        1 -> "Settle & log payment"
+        2 -> "Create IOU & log"
+        else -> "Approve & log transaction"
+    }
+    val actionColor = when (mode) {
+        1 -> GoldAccent
+        2 -> SecondaryTeal
+        else -> AccentGreen
+    }
 
-    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+    // The platform default dialog width is too narrow for a three-tab toggle, so the window is
+    // sized here instead: full width minus a margin, and only as tall as its content needs.
+    androidx.compose.ui.window.Dialog(
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+    ) {
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 640.dp),
-            shape = RoundedCornerShape(24.dp),
+                .padding(horizontal = 14.dp, vertical = 24.dp),
+            shape = RoundedCornerShape(28.dp),
             color = DarkSurface
         ) {
-            LazyColumn(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp)
-            ) {
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Column {
-                            Text(
-                                "Approve Transaction",
-                                style = Typography.titleLarge.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
+            Column(modifier = Modifier.fillMaxWidth()) {
+                // Header and action bar are pinned; only the form between them scrolls, so the
+                // approve button stays reachable no matter how tall the form grows.
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 20.dp, end = 10.dp, top = 18.dp, bottom = 14.dp),
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            modeTitle,
+                            style = Typography.titleLarge.copy(color = TextPrimary, fontWeight = FontWeight.Bold)
+                        )
+                        Spacer(modifier = Modifier.height(3.dp))
+                        Text(
+                            modeSubtitle,
+                            style = Typography.bodySmall.copy(
+                                color = if (mode == 2) SecondaryTeal else if (isAutoFilled) AccentGreen else TextSecondary,
+                                lineHeight = 16.sp
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                if (isAutoFilled) {
-                                    "Envelope filled in from how you filed this merchant before"
-                                } else {
-                                    "Review the details before logging"
-                                },
-                                style = Typography.bodySmall.copy(
-                                    color = if (isAutoFilled) AccentGreen else TextSecondary
-                                )
-                            )
-                        }
-                        IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Close",
-                                tint = TextSecondary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(8.dp))
+                    IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Close",
+                            tint = TextSecondary,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
 
-                item {
+                HorizontalDivider(color = BorderColor.copy(alpha = 0.4f), thickness = 0.5.dp)
+
+                Column(
+                    modifier = Modifier
+                        // fill = false keeps a short form compact instead of stretching the
+                        // dialog to the full screen height.
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                        .padding(horizontal = 20.dp, vertical = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
                     // Transaction details summary card
                     Surface(color = DeepBackground, shape = RoundedCornerShape(16.dp)) {
                         Column(modifier = Modifier.padding(14.dp)) {
@@ -954,7 +1066,9 @@ private fun ApproveSmsDialog(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(
                                         SmsAmountFormatter.display(tx.amount),
-                                        style = Typography.headlineSmall.copy(fontWeight = FontWeight.Bold, color = directionColor)
+                                        style = Typography.headlineSmall.copy(fontWeight = FontWeight.Bold, color = directionColor),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                     if (tx.counterparty.isNotEmpty()) {
                                         Text(
@@ -965,6 +1079,7 @@ private fun ApproveSmsDialog(
                                         )
                                     }
                                 }
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Icon(
                                     if (currentTxType == TransactionType.INCOME) Icons.Default.CallReceived else Icons.Default.CallMade,
                                     contentDescription = null,
@@ -982,7 +1097,10 @@ private fun ApproveSmsDialog(
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     if (tx.accountName.isNotEmpty()) {
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Row(
+                                            modifier = Modifier.weight(1f, fill = false),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
                                             Icon(
                                                 Icons.Default.AccountBalance,
                                                 contentDescription = null,
@@ -990,7 +1108,12 @@ private fun ApproveSmsDialog(
                                                 modifier = Modifier.size(13.dp)
                                             )
                                             Spacer(modifier = Modifier.width(4.dp))
-                                            Text(tx.accountName, style = Typography.labelSmall.copy(color = TextSecondary))
+                                            Text(
+                                                tx.accountName,
+                                                style = Typography.labelSmall.copy(color = TextSecondary),
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
                                         }
                                     }
                                     if (tx.reference.isNotEmpty()) {
@@ -998,39 +1121,60 @@ private fun ApproveSmsDialog(
                                             "Ref: ${tx.reference}",
                                             style = Typography.labelSmall.copy(color = TextSecondary),
                                             maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
                                         )
                                     }
                                 }
                             }
                         }
                     }
-                }
 
-                // Standard vs Settle IOU Toggle
-                item {
+                    // Standard, settle, or create an IOU directly from this SMS.
                     SegmentedToggle(
-                        options = listOf("Standard Log", "Settle IOU"),
-                        selectedIndex = if (isSettleIou) 1 else 0,
-                        onSelect = { isSettleIou = it == 1 },
-                        selectedColors = listOf(SecondaryTeal, GoldAccent)
+                        options = listOf("Transaction", "Settle IOU", "New IOU"),
+                        selectedIndex = mode,
+                        onSelect = {
+                            mode = it
+                            validationError = null
+                        },
+                        selectedColors = listOf(SecondaryTeal, GoldAccent, AccentGreen),
+                        icons = listOf(Icons.Default.ReceiptLong, Icons.Default.Autorenew, Icons.Default.PersonAdd)
                     )
-                }
 
-                if (!isSettleIou) {
-                    item {
+                    if (mode == 1) {
+                        Surface(
+                            color = GoldAccent.copy(alpha = 0.10f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, GoldAccent.copy(alpha = 0.25f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.Autorenew, contentDescription = null, tint = GoldAccent, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    if (tx.type == "credit") "Received money can reduce what someone owes you."
+                                    else "This payment can reduce what you owe someone.",
+                                    style = Typography.bodySmall.copy(color = TextPrimary, lineHeight = 16.sp)
+                                )
+                            }
+                        }
+                    }
+
+                    if (mode == 0) {
                         SegmentedToggle(
                             options = listOf("Expense", "Income"),
                             selectedIndex = if (currentTxType == TransactionType.INCOME) 1 else 0,
                             onSelect = { currentTxType = if (it == 1) TransactionType.INCOME else TransactionType.EXPENSE },
-                            selectedColors = listOf(AlertRed, AccentGreen)
+                            selectedColors = listOf(AlertRed, AccentGreen),
+                            icons = listOf(Icons.Default.CallMade, Icons.Default.CallReceived)
                         )
                     }
-                }
 
-                if (isSettleIou) {
-                    // IOU Fields
-                    item {
+                    if (mode == 1) {
+                        // IOU Fields
                         ExposedDropdownMenuBox(
                             expanded = debtExpanded,
                             onExpandedChange = { debtExpanded = !debtExpanded }
@@ -1039,6 +1183,7 @@ private fun ApproveSmsDialog(
                                 value = activeDebts.find { it.id == selectedDebtId }?.personName ?: "Select debt",
                                 onValueChange = {},
                                 readOnly = true,
+                                singleLine = true,
                                 label = { Text("Settle IOU") },
                                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = debtExpanded) },
                                 modifier = Modifier.menuAnchor().fillMaxWidth(),
@@ -1066,22 +1211,46 @@ private fun ApproveSmsDialog(
                                 }
                             }
                         }
-                    }
 
-                    item {
                         OutlinedTextField(
                             value = settleAmountStr,
                             onValueChange = { settleAmountStr = it },
                             label = { Text("Settlement amount") },
+                            singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
                             shape = RoundedCornerShape(12.dp),
                             colors = fieldColors
                         )
                     }
-                }
 
-                item {
+                    if (mode == 2) {
+                        Text(
+                            if (tx.type == "credit") "Record this money as borrowed from this person"
+                            else "Record this payment as money lent to this person",
+                            style = Typography.bodySmall.copy(color = TextSecondary, lineHeight = 16.sp)
+                        )
+                        OutlinedTextField(
+                            value = iouPersonName,
+                            onValueChange = { iouPersonName = it },
+                            label = { Text("Person Name") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = fieldColors
+                        )
+                        OutlinedTextField(
+                            value = iouAmountStr,
+                            onValueChange = { iouAmountStr = it },
+                            label = { Text("IOU amount") },
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = fieldColors
+                        )
+                    }
+
                     ExposedDropdownMenuBox(
                         expanded = accountExpanded,
                         onExpandedChange = { accountExpanded = !accountExpanded }
@@ -1090,6 +1259,7 @@ private fun ApproveSmsDialog(
                             value = accounts.find { it.id == selectedAccountId }?.name ?: "Select account",
                             onValueChange = {},
                             readOnly = true,
+                            singleLine = true,
                             label = { Text("Account") },
                             leadingIcon = {
                                 Icon(Icons.Default.AccountBalance, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1117,10 +1287,8 @@ private fun ApproveSmsDialog(
                             }
                         }
                     }
-                }
 
-                if (!isSettleIou) {
-                    item {
+                    if (mode == 0) {
                         ExposedDropdownMenuBox(
                             expanded = categoryExpanded,
                             onExpandedChange = { categoryExpanded = !categoryExpanded }
@@ -1129,6 +1297,7 @@ private fun ApproveSmsDialog(
                                 value = categories.find { it.id == selectedCategoryId }?.name ?: "Select envelope",
                                 onValueChange = {},
                                 readOnly = true,
+                                singleLine = true,
                                 label = { Text("Envelope budget") },
                                 leadingIcon = {
                                     Icon(Icons.Default.Category, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1157,9 +1326,7 @@ private fun ApproveSmsDialog(
                             }
                         }
                     }
-                }
 
-                item {
                     OutlinedTextField(
                         value = note,
                         onValueChange = onNoteChange,
@@ -1174,46 +1341,75 @@ private fun ApproveSmsDialog(
                     )
                 }
 
-                item {
-                    val context = androidx.compose.ui.platform.LocalContext.current
-                    Column {
-                        iOSButton(
-                            onClick = {
-                                if (isSettleIou) {
-                                    val debt = activeDebts.find { it.id == selectedDebtId } ?: activeDebts.firstOrNull()
-                                    val cleanAmt = SmsAmountFormatter.number(settleAmountStr).toDoubleOrNull() ?: 0.0
-                                    when {
-                                        activeDebts.isEmpty() -> {
-                                            android.widget.Toast.makeText(context, "No active IOUs to settle", android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                        debt == null -> {
-                                            android.widget.Toast.makeText(context, "Please select an IOU debt to settle", android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                        cleanAmt <= 0.0 -> {
-                                            android.widget.Toast.makeText(context, "Please enter a valid settlement amount", android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                        else -> {
-                                            onConfirmDebt(debt, cleanAmt)
-                                        }
-                                    }
-                                } else {
-                                    onConfirmStandard(currentTxType)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            variant = iOSButtonVariant.Accent, accentColor = AccentGreen
-                        ) {
-                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Confirm & Log", fontWeight = FontWeight.SemiBold)
-                        }
+                HorizontalDivider(color = BorderColor.copy(alpha = 0.4f), thickness = 0.5.dp)
 
-                        TextButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.fillMaxWidth()
+                Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
+                    // A dialog can't host a snackbar, and a toast lands outside the sheet the user
+                    // is looking at — so validation is answered in place, next to the control that
+                    // needs fixing.
+                    validationError?.let { error ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text("Cancel", color = TextSecondary)
+                            Icon(
+                                Icons.Default.ErrorOutline,
+                                contentDescription = null,
+                                tint = AlertRed,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                error,
+                                style = Typography.bodySmall.copy(color = AlertRed, lineHeight = 16.sp)
+                            )
                         }
+                    }
+                    iOSButton(
+                        onClick = {
+                            validationError = null
+                            if (mode == 1) {
+                                val debt = activeDebts.find { it.id == selectedDebtId } ?: activeDebts.firstOrNull()
+                                val cleanAmt = SmsAmountFormatter.number(settleAmountStr).toDoubleOrNull() ?: 0.0
+                                when {
+                                    activeDebts.isEmpty() -> {
+                                        validationError = "You have no open IOUs of this kind to settle."
+                                    }
+                                    debt == null -> {
+                                        validationError = "Choose which IOU this payment settles."
+                                    }
+                                    cleanAmt <= 0.0 -> {
+                                        validationError = "Enter a settlement amount greater than zero."
+                                    }
+                                    else -> {
+                                        onConfirmDebt(debt, cleanAmt)
+                                    }
+                                }
+                            } else if (mode == 2) {
+                                val cleanAmt = SmsAmountFormatter.number(iouAmountStr).toDoubleOrNull() ?: 0.0
+                                onCreateIou(iouPersonName, cleanAmt, note)
+                            } else {
+                                onConfirmStandard(currentTxType)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        variant = iOSButtonVariant.Accent, accentColor = actionColor
+                    ) {
+                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            actionLabel,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Cancel", color = TextSecondary)
                     }
                 }
             }
