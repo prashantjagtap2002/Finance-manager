@@ -67,7 +67,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -121,9 +121,9 @@ fun QuickEntryScreen(
     viewModel: FinanceViewModel,
     onNavigateBack: () -> Unit
 ) {
-    val accounts by viewModel.accounts.collectAsState()
-    val categories by viewModel.categories.collectAsState()
-    val amountInput by viewModel.amountInput.collectAsState()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val amountInput by viewModel.amountInput.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var selectedType by remember { mutableStateOf(TransactionType.EXPENSE) }
@@ -533,7 +533,7 @@ fun QuickEntryScreen(
                                         SplitItem(
                                             label = label,
                                             categoryId = matchedCategoryId,
-                                            amount = String.format("%.2f", amount).removeSuffix(".00")
+                                            amount = String.format(java.util.Locale.US, "%.2f", amount).removeSuffix(".00")
                                         )
                                     }
                                 }

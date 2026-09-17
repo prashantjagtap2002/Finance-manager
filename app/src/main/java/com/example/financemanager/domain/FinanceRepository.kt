@@ -5,6 +5,15 @@ import kotlinx.coroutines.flow.Flow
 
 class FinanceRepository(private val dao: FinanceDao) {
 
+    /**
+     * Rows go to the DAO carrying a fresh `updatedAt`, because everything that reaches the
+     * repository is a local edit and the cloud merge decides which side is newer by comparing
+     * those stamps. The DAO itself never stamps: [com.example.financemanager.services.SyncWorker]
+     * writes through it directly, and a row arriving from the server has to keep the timestamp it
+     * was saved with or it would look locally edited on arrival and be pushed straight back.
+     */
+    private fun now() = System.currentTimeMillis()
+
     // Accounts
     val accounts: Flow<List<Account>> = dao.getAccountsFlow()
     
@@ -12,9 +21,9 @@ class FinanceRepository(private val dao: FinanceDao) {
 
     suspend fun getAccountsOnce(): List<Account> = dao.getAccountsList()
 
-    suspend fun insertAccount(account: Account): Long = dao.insertAccount(account)
+    suspend fun insertAccount(account: Account): Long = dao.insertAccount(account.copy(updatedAt = now()))
     
-    suspend fun updateAccount(account: Account) = dao.updateAccount(account)
+    suspend fun updateAccount(account: Account) = dao.updateAccount(account.copy(updatedAt = now()))
     
     suspend fun deleteAccount(account: Account) = dao.deleteAccount(account)
 
@@ -23,11 +32,12 @@ class FinanceRepository(private val dao: FinanceDao) {
     
     suspend fun getCategoryById(id: Long): Category? = dao.getCategoryById(id)
     
-    suspend fun insertCategory(category: Category): Long = dao.insertCategory(category)
+    suspend fun insertCategory(category: Category): Long = dao.insertCategory(category.copy(updatedAt = now()))
     
-    suspend fun updateCategory(category: Category) = dao.updateCategory(category)
+    suspend fun updateCategory(category: Category) = dao.updateCategory(category.copy(updatedAt = now()))
     
-    suspend fun updateCategories(categories: List<Category>) = dao.updateCategories(categories)
+    suspend fun updateCategories(categories: List<Category>) =
+        dao.updateCategories(categories.map { it.copy(updatedAt = now()) })
     
     suspend fun countTransactionsInCategory(categoryId: Long): Int =
         dao.countTransactionsInCategory(categoryId)
@@ -53,6 +63,37 @@ class FinanceRepository(private val dao: FinanceDao) {
     suspend fun getTransactionsForAccount(accountId: Long): List<Transaction> =
         dao.getTransactionsForAccount(accountId)
 
+    // --- One-shot snapshots ---
+    // Everything that writes a file (backup, CSV, PDF) reads through these rather than off a
+    // StateFlow. A `stateIn(WhileSubscribed)` flow that nothing has collected yet still answers
+    // `.value` — with its initial empty list — so an export taken before any screen had subscribed
+    // wrote an empty file and reported success.
+
+    suspend fun getCategoriesOnce(): List<Category> = dao.getCategoriesList()
+
+    suspend fun getTransactionsOnce(): List<Transaction> = dao.getTransactionsList()
+
+    suspend fun getRecurringOnce(): List<RecurringTransaction> = dao.getRecurringTransactionsList()
+
+    suspend fun getSavingsGoalsOnce(): List<SavingsGoal> = dao.getSavingsGoalsList()
+
+    suspend fun getDebtsOnce(): List<Debt> = dao.getDebtsList()
+
+    suspend fun getInvestmentsOnce(): List<Investment> = dao.getInvestmentsList()
+
+    suspend fun getInvestmentTransactionsOnce(): List<InvestmentTransaction> =
+        dao.getInvestmentTransactionsList()
+
+    suspend fun getMerchantRulesOnce(): List<MerchantRule> = dao.getMerchantRulesList()
+
+    suspend fun getExpenseGroupsOnce(): List<ExpenseGroup> = dao.getExpenseGroupsList()
+
+    suspend fun getExpenseGroupMembersOnce(): List<ExpenseGroupMember> =
+        dao.getExpenseGroupMembersList()
+
+    suspend fun getExpenseGroupExpensesOnce(): List<ExpenseGroupExpense> =
+        dao.getExpenseGroupExpensesList()
+
     /**
      * Deletes an account by merging it into [targetAccountId]: its transactions, templates and
      * rules move across, and the target absorbs both its balance and its opening balance, which
@@ -68,7 +109,8 @@ class FinanceRepository(private val dao: FinanceDao) {
         dao.updateAccount(
             target.copy(
                 balance = target.balance + account.balance,
-                openingBalance = target.openingBalance + account.openingBalance
+                openingBalance = target.openingBalance + account.openingBalance,
+                updatedAt = now()
             )
         )
         dao.deleteAccount(account)
@@ -94,8 +136,20 @@ class FinanceRepository(private val dao: FinanceDao) {
         return dao.getTransactionsBetweenDatesFlow(start, end)
     }
 
+    /**
+     * Free-text search. The query is escaped so that `%` and `_` typed by the user are matched
+     * literally — unescaped, a search for "%" returned the entire ledger.
+     */
     fun searchTransactions(query: String): Flow<List<Transaction>> {
-        return dao.searchTransactionsFlow(query)
+        return dao.searchTransactionsFlow(escapeLikeLiteral(query))
+    }
+
+    /** Escapes the LIKE wildcards, and the escape character itself, in user-typed text. */
+    private fun escapeLikeLiteral(raw: String): String = buildString(raw.length) {
+        raw.forEach { ch ->
+            if (ch == '\\' || ch == '%' || ch == '_') append('\\')
+            append(ch)
+        }
     }
     
     suspend fun getTransactionById(id: Long): Transaction? = dao.getTransactionById(id)
@@ -140,9 +194,9 @@ class FinanceRepository(private val dao: FinanceDao) {
     suspend fun insertTransactionFromBackup(transaction: Transaction): Long =
         dao.insertTransaction(transaction)
 
-    /** See [AccountLedger.postSideEffect]. */
-    suspend fun postLedgerSideEffect(accountId: Long, amount: Double, note: String, date: Long): Long =
-        AccountLedger.postSideEffect(dao, accountId, amount, note, date)
+    /** See [AccountLedger.postBalanceAdjustment]. [delta] is negative out, positive in. */
+    suspend fun postBalanceAdjustment(accountId: Long, delta: Double, note: String, date: Long): Long =
+        AccountLedger.postBalanceAdjustment(dao, accountId, delta, note, date)
 
     /** Repairs balances that disagree with their transactions; returns what was corrected. */
     suspend fun reconcileBalances(): List<BalanceDrift> = AccountLedger.reconcile(dao)
@@ -154,11 +208,11 @@ class FinanceRepository(private val dao: FinanceDao) {
     val recurringTransactions: Flow<List<RecurringTransaction>> = dao.getRecurringTransactionsFlow()
     
     suspend fun insertRecurringTransaction(recurringTransaction: RecurringTransaction): Long {
-        return dao.insertRecurringTransaction(recurringTransaction)
+        return dao.insertRecurringTransaction(recurringTransaction.copy(updatedAt = now()))
     }
     
     suspend fun updateRecurringTransaction(recurringTransaction: RecurringTransaction) {
-        dao.updateRecurringTransaction(recurringTransaction)
+        dao.updateRecurringTransaction(recurringTransaction.copy(updatedAt = now()))
     }
     
     suspend fun deleteRecurringTransaction(recurringTransaction: RecurringTransaction) {
@@ -179,12 +233,14 @@ class FinanceRepository(private val dao: FinanceDao) {
 
     suspend fun getSavingsGoalById(id: Long): SavingsGoal? = dao.getSavingsGoalById(id)
 
-    suspend fun insertSavingsGoal(goal: SavingsGoal): Long = dao.insertSavingsGoal(goal)
+    suspend fun insertSavingsGoal(goal: SavingsGoal): Long = dao.insertSavingsGoal(goal.copy(updatedAt = now()))
 
-    suspend fun updateSavingsGoal(goal: SavingsGoal) = dao.updateSavingsGoal(goal)
+    suspend fun updateSavingsGoal(goal: SavingsGoal) = dao.updateSavingsGoal(goal.copy(updatedAt = now()))
 
     suspend fun deleteSavingsGoal(goal: SavingsGoal) = dao.deleteSavingsGoal(goal)
 
+    /** Empties every table the app owns. "All" has to mean all — a leftover holding would
+     *  reappear against accounts that no longer exist. */
     suspend fun clearAllTables() {
         dao.clearAccounts()
         dao.clearCategories()
@@ -194,20 +250,31 @@ class FinanceRepository(private val dao: FinanceDao) {
         dao.clearDebts()
         dao.clearSmsTransactions()
         dao.clearMerchantRules()
+        dao.clearInvestmentTransactions()
+        dao.clearInvestments()
         clearExpenseGroups()
     }
 
     suspend fun replaceBackupData(
         accounts: List<Account>, categories: List<Category>, transactions: List<Transaction>,
-        recurring: List<RecurringTransaction>, goals: List<SavingsGoal>, debts: List<Debt>
-    ) = dao.replaceBackupData(accounts, categories, transactions, recurring, goals, debts)
+        recurring: List<RecurringTransaction>, goals: List<SavingsGoal>, debts: List<Debt>,
+        investments: List<Investment> = emptyList(),
+        investmentTransactions: List<InvestmentTransaction> = emptyList(),
+        merchantRules: List<MerchantRule> = emptyList(),
+        groups: List<ExpenseGroup> = emptyList(),
+        groupMembers: List<ExpenseGroupMember> = emptyList(),
+        groupExpenses: List<ExpenseGroupExpense> = emptyList()
+    ) = dao.replaceBackupData(
+        accounts, categories, transactions, recurring, goals, debts,
+        investments, investmentTransactions, merchantRules, groups, groupMembers, groupExpenses
+    )
 
     // Debts
     val debts: Flow<List<Debt>> = dao.getDebtsFlow()
 
-    suspend fun insertDebt(debt: Debt): Long = dao.insertDebt(debt)
+    suspend fun insertDebt(debt: Debt): Long = dao.insertDebt(debt.copy(updatedAt = now()))
 
-    suspend fun updateDebt(debt: Debt) = dao.updateDebt(debt)
+    suspend fun updateDebt(debt: Debt) = dao.updateDebt(debt.copy(updatedAt = now()))
 
     suspend fun deleteDebt(debt: Debt) = dao.deleteDebt(debt)
 
@@ -241,9 +308,37 @@ class FinanceRepository(private val dao: FinanceDao) {
 
     suspend fun getSmsTransactionByHash(hash: String): SmsTransaction? = dao.getSmsTransactionByHash(hash)
 
-    suspend fun insertSmsTransaction(smsTransaction: SmsTransaction): Long = dao.insertSmsTransaction(smsTransaction)
+    suspend fun getSmsTransactionById(id: Long): SmsTransaction? = dao.getSmsTransactionById(id)
 
-    suspend fun updateSmsTransaction(smsTransaction: SmsTransaction) = dao.updateSmsTransaction(smsTransaction)
+    /**
+     * Unpicks the other leg of a resolved pair, sending it back to the inbox unapproved.
+     *
+     * A pair shares a single transaction — the debit leg holds it and the credit leg holds none —
+     * so re-filing or un-ignoring one leg on its own left the other claiming a resolution whose
+     * transaction had just been deleted, or still owning the transaction the resolution was made
+     * of. Whichever leg holds it, it goes with the pairing.
+     */
+    suspend fun detachSmsPartner(sms: SmsTransaction) {
+        if (sms.linkedSmsId <= 0L) return
+        val partner = dao.getSmsTransactionById(sms.linkedSmsId) ?: return
+        if (partner.linkedSmsId != sms.id) return
+        revokeLoggedTransaction(partner)
+        dao.updateSmsTransaction(
+            partner.copy(
+                isApproved = false,
+                loggedTransactionId = 0L,
+                linkedSmsId = 0L,
+                resolution = "",
+                updatedAt = now()
+            )
+        )
+    }
+
+    suspend fun insertSmsTransaction(smsTransaction: SmsTransaction): Long =
+        dao.insertSmsTransaction(smsTransaction.copy(updatedAt = now()))
+
+    suspend fun updateSmsTransaction(smsTransaction: SmsTransaction) =
+        dao.updateSmsTransaction(smsTransaction.copy(updatedAt = now()))
 
     suspend fun deleteSmsTransaction(smsTransaction: SmsTransaction) = dao.deleteSmsTransaction(smsTransaction)
 

@@ -13,6 +13,7 @@ import com.example.financemanager.data.remote.SupabaseManager
 import com.example.financemanager.domain.BalanceDrift
 import com.example.financemanager.domain.FinanceRepository
 import com.example.financemanager.services.NotificationHelper
+import com.example.financemanager.services.PdfExportResult
 import com.example.financemanager.services.SyncWorker
 import com.example.financemanager.domain.MerchantKey
 import com.example.financemanager.domain.NlpParser
@@ -153,6 +154,19 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     /** Summary of the last [importSmsXmlHistorical] run, or null once the caller has read it. */
     private val _historicalImportResult = MutableStateFlow<String?>(null)
     val historicalImportResult: StateFlow<String?> = _historicalImportResult.asStateFlow()
+
+    /**
+     * Why an SMS approval was refused, or null once the caller has read it.
+     *
+     * An approval that cannot go through has to say so. Returning quietly would leave the alert
+     * sitting in the inbox with the dialog dismissed and nothing to explain why nothing happened.
+     */
+    private val _smsApprovalError = MutableStateFlow<String?>(null)
+    val smsApprovalError: StateFlow<String?> = _smsApprovalError.asStateFlow()
+
+    fun clearSmsApprovalError() {
+        _smsApprovalError.value = null
+    }
 
     init {
         FinancePreferences.init(application)
@@ -315,13 +329,16 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
-        cashflowWarning = combine(accounts, recurringTransactions) { accs, recs ->
+        // Privacy mode is an input rather than something moneyString picks up on its own: these
+        // strings are built off the main thread and cached in a StateFlow, so a flag read inside
+        // the builder would freeze at whatever it was when the sentence was first composed.
+        cashflowWarning = combine(accounts, recurringTransactions, isPrivacyMode) { accs, recs, privacy ->
             val primary = accs.firstOrNull() ?: return@combine null
             val now = System.currentTimeMillis()
             val upcoming = recs.filter { !it.isPaused && it.isAutoLog && it.type == TransactionType.EXPENSE && (it.nextExecutionDate - now) in 0..(3 * 24 * 60 * 60 * 1000L) }
             for (rt in upcoming) {
                 if (primary.balance < rt.amount) {
-                    return@combine "Heads up! Your upcoming bill \"${rt.note.ifEmpty { "Subscription" }}\" is ${moneyString(rt.amount, false)}, but your ${primary.name} account only has ${moneyString(primary.balance, false)}."
+                    return@combine "Heads up! Your upcoming bill \"${rt.note.ifEmpty { "Subscription" }}\" is ${moneyString(rt.amount, privacy)}, but your ${primary.name} account only has ${moneyString(primary.balance, privacy)}."
                 }
             }
             null
@@ -362,15 +379,15 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }.flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-        aiRecapText = transactions.map { txList ->
+        aiRecapText = combine(transactions, isPrivacyMode) { txList, privacy ->
             val now = System.currentTimeMillis()
             val oneWeekMs = 7L * 24 * 60 * 60 * 1000
             val thisWeekSpent = txList.filter { it.type == TransactionType.EXPENSE && it.date > now - oneWeekMs }.sumOf { it.amount }
             val lastWeekSpent = txList.filter { it.type == TransactionType.EXPENSE && it.date in (now - 2 * oneWeekMs)..(now - oneWeekMs) }.sumOf { it.amount }
-            
+
             if (thisWeekSpent == 0.0 && lastWeekSpent == 0.0) null
-            else if (thisWeekSpent < lastWeekSpent) "You spent ${moneyString(thisWeekSpent, false)} this week — that's less than last week! 🎉"
-            else "You spent ${moneyString(thisWeekSpent, false)} this week. Watch your expenses to stay on track!"
+            else if (thisWeekSpent < lastWeekSpent) "You spent ${moneyString(thisWeekSpent, privacy)} this week — that's less than last week! 🎉"
+            else "You spent ${moneyString(thisWeekSpent, privacy)} this week. Watch your expenses to stay on track!"
         }.flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
@@ -435,7 +452,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
         // Establish an anonymous Supabase session for cloud sync
         viewModelScope.launch {
-            _cloudUserId.value = SupabaseManager.ensureSignedIn(application)
+            _cloudUserId.value = SupabaseManager.ensureSignedIn()
         }
     }
 
@@ -635,7 +652,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                 )
             }
 
-            // Milestone notifications (50% and 100%)
+            // Milestone notifications (50% and 100%). A goal with no target has no fractions to
+            // cross — the division would be NaN and every comparison below quietly false.
+            if (goal.targetAmount <= 0.0) return@launch
             val after = updated.savedAmount / updated.targetAmount
             val context = getApplication<Application>()
             when {
@@ -690,7 +709,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     // --- Undo support: restore a just-deleted transaction ---
     fun restoreTransaction(transaction: Transaction) {
         viewModelScope.launch {
-            // Re-inserting re-applies the balance effect that deleting it backed out.
+            // Re-inserting re-applies the balance effect that deleting it backed out. Guarded
+            // because the insert is a REPLACE on the row's own id: a second undo of the same
+            // transaction would overwrite the restored row and credit the account all over again.
+            if (transaction.id != 0L && repository.getTransactionById(transaction.id) != null) return@launch
             repository.insertTransaction(transaction)
         }
     }
@@ -786,7 +808,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     isSip = isSip
                 )
             )
-            repository.postLedgerSideEffect(accountId, -amount, "Invested in ${investment.name}", date)
+            // Money leaves the funding account to buy the units.
+            repository.postBalanceAdjustment(accountId, -amount, "Invested in ${investment.name}", date)
         }
     }
 
@@ -812,7 +835,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     sourceAccountId = accountId
                 )
             )
-            repository.postLedgerSideEffect(accountId, amount, "Sold ${investment.name}", date)
+            // Proceeds arrive in the account.
+            repository.postBalanceAdjustment(accountId, amount, "Sold ${investment.name}", date)
         }
     }
 
@@ -824,11 +848,12 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun deleteInvestmentTransaction(transaction: InvestmentTransaction) {
         viewModelScope.launch {
             repository.deleteInvestmentTransaction(transaction)
+            // Undoing a sell takes the proceeds back out; undoing a buy returns the cash.
             val reversal = when (transaction.type) {
                 InvestmentTxnType.SELL -> -transaction.amount
                 else -> transaction.amount
             }
-            repository.postLedgerSideEffect(
+            repository.postBalanceAdjustment(
                 transaction.sourceAccountId,
                 reversal,
                 "Reversed investment log",
@@ -942,7 +967,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun setAmount(amount: Double) {
-        _amountInput.value = String.format("%.2f", amount).removeSuffix(".00")
+        _amountInput.value = String.format(java.util.Locale.US, "%.2f", amount).removeSuffix(".00")
     }
 
     // --- Core Transaction Insertions & Edits ---
@@ -1040,9 +1065,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             // than adjusting the balance behind the ledger's back.
             val unallocated = totalAmount - splits.sumOf { it.second }
             if (kotlin.math.abs(unallocated) > 0.005) {
-                repository.postLedgerSideEffect(
+                repository.postBalanceAdjustment(
                     accountId = accountId,
-                    amount = unallocated,
+                    delta = -unallocated,
                     note = note.ifEmpty { "Unallocated split remainder" },
                     date = date
                 )
@@ -1107,9 +1132,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             // 3. The friend's share left the account too, so it needs a ledger entry — as a
             // transfer, which moves the balance without counting as the user's spending.
             if (friendShare > 0) {
-                repository.postLedgerSideEffect(
+                repository.postBalanceAdjustment(
                     accountId = rec.accountId,
-                    amount = friendShare,
+                    delta = -friendShare,
                     note = "Lent to $friendName for ${rec.note.ifEmpty { "Subscription" }}",
                     date = now
                 )
@@ -1312,8 +1337,13 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // --- CSV Exporter Helper ---
-    fun exportTransactionsToCsv(context: Context): String? {
-        val list = transactions.value
+    /**
+     * Writes every transaction to the shared Downloads folder. Suspending because it reads the
+     * database rather than a cached StateFlow, which could be empty before a screen has
+     * subscribed to it.
+     */
+    suspend fun exportTransactionsToCsv(context: Context): String? {
+        val list = repository.getTransactionsOnce()
         if (list.isEmpty()) return null
 
         return try {
@@ -1330,7 +1360,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 context.contentResolver.openOutputStream(uri)?.bufferedWriter(Charsets.UTF_8)?.use {
-                    it.write(transactionCsv(transactions.value))
+                    it.write(transactionCsv(repository.getTransactionsOnce()))
                 } ?: error("Unable to open selected file")
                 withContext(Dispatchers.Main) { onSuccess() }
             } catch (e: Exception) {
@@ -1339,9 +1369,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun transactionCsv(list: List<Transaction>): String {
-        val categoryById = categories.value.associateBy { it.id }
-        val accountById = accounts.value.associateBy { it.id }
+    private suspend fun transactionCsv(list: List<Transaction>): String {
+        val categoryById = repository.getCategoriesOnce().associateBy { it.id }
+        val accountById = repository.getAccountsOnce().associateBy { it.id }
         val dateFormat = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
         fun csv(value: String): String = "\"${value.replace("\"", "\"\"")}\""
 
@@ -1468,12 +1498,32 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     fun exportBackupToUri(context: Context, uri: Uri, onSuccess: () -> Unit, onError: (String) -> Unit) {
         viewModelScope.launch {
             try {
+                // Read the database, not the StateFlows. A `stateIn(WhileSubscribed)` flow that
+                // nothing has collected yet answers `.value` with its initial empty list, so an
+                // export taken before any screen had subscribed wrote an empty backup and
+                // reported success.
+                val accountsSnapshot = repository.getAccountsOnce()
+                val categoriesSnapshot = repository.getCategoriesOnce()
+                val transactionsSnapshot = repository.getTransactionsOnce()
+                val recurringSnapshot = repository.getRecurringOnce()
+                val goalsSnapshot = repository.getSavingsGoalsOnce()
+                val debtsSnapshot = repository.getDebtsOnce()
+                val investmentsSnapshot = repository.getInvestmentsOnce()
+                val investmentTxnsSnapshot = repository.getInvestmentTransactionsOnce()
+                val merchantRulesSnapshot = repository.getMerchantRulesOnce()
+                val groupsSnapshot = repository.getExpenseGroupsOnce()
+                val groupMembersSnapshot = repository.getExpenseGroupMembersOnce()
+                val groupExpensesSnapshot = repository.getExpenseGroupExpensesOnce()
+
                 val rootJson = JSONObject().apply {
-                    put("version", 1)
+                    // Version 2 carries the tables version 1 left out entirely: holdings,
+                    // group expenses and learned merchant rules had no backup path at all. A
+                    // version 1 file still restores; it simply has nothing to say about them.
+                    put("version", 2)
 
                     // 1. Accounts
                     val accountsArray = JSONArray()
-                    accounts.value.forEach { account ->
+                    accountsSnapshot.forEach { account ->
                         accountsArray.put(JSONObject().apply {
                             put("id", account.id)
                             put("name", account.name)
@@ -1487,7 +1537,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
                     // 2. Categories (Envelopes)
                     val categoriesArray = JSONArray()
-                    categories.value.forEach { category ->
+                    categoriesSnapshot.forEach { category ->
                         categoriesArray.put(JSONObject().apply {
                             put("id", category.id)
                             put("name", category.name)
@@ -1503,7 +1553,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
                     // 3. Transactions
                     val transactionsArray = JSONArray()
-                    transactions.value.forEach { trans ->
+                    transactionsSnapshot.forEach { trans ->
                         transactionsArray.put(JSONObject().apply {
                             put("id", trans.id)
                             put("amount", trans.amount)
@@ -1527,7 +1577,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
                     // 4. Recurring Transactions
                     val recurringArray = JSONArray()
-                    recurringTransactions.value.forEach { rec ->
+                    recurringSnapshot.forEach { rec ->
                         recurringArray.put(JSONObject().apply {
                             put("id", rec.id)
                             put("amount", rec.amount)
@@ -1545,7 +1595,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
                     // 5. Savings Goals
                     val goalsArray = JSONArray()
-                    savingsGoals.value.forEach { goal ->
+                    goalsSnapshot.forEach { goal ->
                         goalsArray.put(JSONObject().apply {
                             put("id", goal.id)
                             put("name", goal.name)
@@ -1561,7 +1611,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
                     // 6. Debts
                     val debtsArray = JSONArray()
-                    debts.value.forEach { debt ->
+                    debtsSnapshot.forEach { debt ->
                         debtsArray.put(JSONObject().apply {
                             put("id", debt.id)
                             put("personName", debt.personName)
@@ -1575,6 +1625,90 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                         })
                     }
                     put("debts", debtsArray)
+
+                    // 7. Investments and their buy/sell/SIP legs
+                    val investmentsArray = JSONArray()
+                    investmentsSnapshot.forEach { inv ->
+                        investmentsArray.put(JSONObject().apply {
+                            put("id", inv.id)
+                            put("name", inv.name)
+                            put("symbol", inv.symbol ?: JSONObject.NULL)
+                            put("exchange", inv.exchange ?: JSONObject.NULL)
+                            put("type", inv.type.name)
+                            put("currentPrice", inv.currentPrice)
+                            put("lastPriceUpdate", inv.lastPriceUpdate)
+                            put("currency", inv.currency)
+                            put("notes", inv.notes)
+                        })
+                    }
+                    put("investments", investmentsArray)
+
+                    val investmentTxnsArray = JSONArray()
+                    investmentTxnsSnapshot.forEach { txn ->
+                        investmentTxnsArray.put(JSONObject().apply {
+                            put("id", txn.id)
+                            put("investmentId", txn.investmentId)
+                            put("type", txn.type.name)
+                            put("quantity", txn.quantity)
+                            put("pricePerUnit", txn.pricePerUnit)
+                            put("amount", txn.amount)
+                            put("date", txn.date)
+                            put("sourceAccountId", txn.sourceAccountId)
+                            put("isSip", txn.isSip)
+                        })
+                    }
+                    put("investmentTransactions", investmentTxnsArray)
+
+                    // 8. Learned merchant rules. Losing these means re-teaching every merchant.
+                    val merchantRulesArray = JSONArray()
+                    merchantRulesSnapshot.forEach { rule ->
+                        merchantRulesArray.put(JSONObject().apply {
+                            put("merchantKey", rule.merchantKey)
+                            put("categoryId", rule.categoryId)
+                            put("accountId", rule.accountId)
+                            put("hitCount", rule.hitCount)
+                            put("updatedAt", rule.updatedAt)
+                        })
+                    }
+                    put("merchantRules", merchantRulesArray)
+
+                    // 9. Shared-expense groups, their members and their receipts
+                    val groupsArray = JSONArray()
+                    groupsSnapshot.forEach { group ->
+                        groupsArray.put(JSONObject().apply {
+                            put("id", group.id)
+                            put("name", group.name)
+                            put("currency", group.currency)
+                            put("createdAt", group.createdAt)
+                        })
+                    }
+                    put("expenseGroups", groupsArray)
+
+                    val groupMembersArray = JSONArray()
+                    groupMembersSnapshot.forEach { member ->
+                        groupMembersArray.put(JSONObject().apply {
+                            put("id", member.id)
+                            put("groupId", member.groupId)
+                            put("name", member.name)
+                            put("upiId", member.upiId)
+                            put("isCurrentUser", member.isCurrentUser)
+                        })
+                    }
+                    put("expenseGroupMembers", groupMembersArray)
+
+                    val groupExpensesArray = JSONArray()
+                    groupExpensesSnapshot.forEach { expense ->
+                        groupExpensesArray.put(JSONObject().apply {
+                            put("id", expense.id)
+                            put("groupId", expense.groupId)
+                            put("description", expense.description)
+                            put("amount", expense.amount)
+                            put("paidByMemberId", expense.paidByMemberId)
+                            put("participantMemberIds", expense.participantMemberIds)
+                            put("date", expense.date)
+                        })
+                    }
+                    put("expenseGroupExpenses", groupExpensesArray)
                 }
 
                 context.contentResolver.openOutputStream(uri)?.use { outputStream ->
@@ -1736,8 +1870,107 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
+                // Parse Investments and their legs. Absent from a version 1 file, in which
+                // case these stay empty and the restore simply clears the tables.
+                val investmentsList = mutableListOf<Investment>()
+                rootJson.optJSONArray("investments")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        investmentsList.add(Investment(
+                            id = obj.optLong("id", 0),
+                            name = obj.getString("name"),
+                            symbol = if (obj.isNull("symbol")) null else obj.getString("symbol"),
+                            exchange = if (obj.isNull("exchange")) null else obj.getString("exchange"),
+                            type = InvestmentType.valueOf(obj.getString("type")),
+                            currentPrice = obj.optDouble("currentPrice", 0.0),
+                            lastPriceUpdate = obj.optLong("lastPriceUpdate", 0),
+                            currency = obj.optString("currency", "INR"),
+                            notes = obj.optString("notes", "")
+                        ))
+                    }
+                }
+
+                val investmentTxnsList = mutableListOf<InvestmentTransaction>()
+                rootJson.optJSONArray("investmentTransactions")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        investmentTxnsList.add(InvestmentTransaction(
+                            id = obj.optLong("id", 0),
+                            investmentId = obj.getLong("investmentId"),
+                            type = InvestmentTxnType.valueOf(obj.getString("type")),
+                            quantity = obj.getDouble("quantity"),
+                            pricePerUnit = obj.getDouble("pricePerUnit"),
+                            amount = obj.getDouble("amount"),
+                            date = obj.getLong("date"),
+                            sourceAccountId = obj.getLong("sourceAccountId"),
+                            isSip = obj.optBoolean("isSip", false)
+                        ))
+                    }
+                }
+
+                val merchantRulesList = mutableListOf<MerchantRule>()
+                rootJson.optJSONArray("merchantRules")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        merchantRulesList.add(MerchantRule(
+                            merchantKey = obj.getString("merchantKey"),
+                            categoryId = obj.getLong("categoryId"),
+                            accountId = obj.optLong("accountId", 0),
+                            hitCount = obj.optInt("hitCount", 1),
+                            updatedAt = obj.optLong("updatedAt", 0)
+                        ))
+                    }
+                }
+
+                val groupsList = mutableListOf<ExpenseGroup>()
+                rootJson.optJSONArray("expenseGroups")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        groupsList.add(ExpenseGroup(
+                            id = obj.optLong("id", 0),
+                            name = obj.getString("name"),
+                            currency = obj.optString("currency", "INR"),
+                            createdAt = obj.optLong("createdAt", System.currentTimeMillis())
+                        ))
+                    }
+                }
+
+                val groupMembersList = mutableListOf<ExpenseGroupMember>()
+                rootJson.optJSONArray("expenseGroupMembers")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        groupMembersList.add(ExpenseGroupMember(
+                            id = obj.optLong("id", 0),
+                            groupId = obj.getLong("groupId"),
+                            name = obj.getString("name"),
+                            upiId = obj.optString("upiId", ""),
+                            isCurrentUser = obj.optBoolean("isCurrentUser", false)
+                        ))
+                    }
+                }
+
+                val groupExpensesList = mutableListOf<ExpenseGroupExpense>()
+                rootJson.optJSONArray("expenseGroupExpenses")?.let { arr ->
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.getJSONObject(i)
+                        groupExpensesList.add(ExpenseGroupExpense(
+                            id = obj.optLong("id", 0),
+                            groupId = obj.getLong("groupId"),
+                            description = obj.optString("description", ""),
+                            amount = obj.getDouble("amount"),
+                            paidByMemberId = obj.getLong("paidByMemberId"),
+                            participantMemberIds = obj.optString("participantMemberIds", ""),
+                            date = obj.optLong("date", System.currentTimeMillis())
+                        ))
+                    }
+                }
+
                 // Wipe existing database and restore backup
-                repository.replaceBackupData(accountsList, categoriesList, transactionsList, recurringList, goalsList, debtsList)
+                repository.replaceBackupData(
+                    accountsList, categoriesList, transactionsList, recurringList, goalsList,
+                    debtsList, investmentsList, investmentTxnsList, merchantRulesList,
+                    groupsList, groupMembersList, groupExpensesList
+                )
 
                 // Insert all elements back. Transactions bypass the ledger here — the accounts
                 // above were restored with their closing balances already baked in, so replaying
@@ -1759,13 +1992,26 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // --- PDF Export ---
-    fun exportMonthlyPdf(context: Context, monthName: String): String? {
-        val txs = transactions.value
-        val accs = accounts.value
-        val cats = categories.value
-        return com.example.financemanager.services.PdfGenerator.generateMonthlyReport(
-            context, txs, accs, cats, monthName
+    /**
+     * Writes the month's report to the shared Downloads folder, unless privacy mode is on.
+     *
+     * The report is the one place the app deliberately prints unmasked amounts — a masked report
+     * is not a report. But it puts every real number into a file any app with storage access can
+     * read, which is the opposite of what someone who just turned privacy mode on is asking for,
+     * so the export waits for them to turn it off rather than quietly opting out of it.
+     */
+    suspend fun exportMonthlyPdf(context: Context, monthName: String): PdfExportResult {
+        if (FinancePreferences.privacyMode) return PdfExportResult.BlockedByPrivacyMode
+        // Straight from the database: a report built off an uncollected StateFlow would be a
+        // page of zeroes presented as this month's finances.
+        val path = com.example.financemanager.services.PdfGenerator.generateMonthlyReport(
+            context,
+            repository.getTransactionsOnce(),
+            repository.getAccountsOnce(),
+            repository.getCategoriesOnce(),
+            monthName
         )
+        return if (path != null) PdfExportResult.Saved(path) else PdfExportResult.Failed
     }
 
     // --- Debts ---
@@ -1865,33 +2111,49 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     fun recordDebtPayment(debt: Debt, paymentAmount: Double, account: Account) {
         viewModelScope.launch {
-            val newPaidAmount = debt.paidAmount + paymentAmount
-            val isNowSettled = newPaidAmount >= debt.amount
-
-            // Update Debt
-            val updatedDebt = debt.copy(
-                paidAmount = newPaidAmount,
-                isSettled = isNowSettled
-            )
-            repository.updateDebt(updatedDebt)
-
-            // Logging the payment moves the balance: money in when they repay a loan you made,
-            // money out when you repay one you took.
-            val txType = if (debt.type == DebtType.LENT) TransactionType.INCOME else TransactionType.EXPENSE
-            val transaction = Transaction(
-                amount = paymentAmount,
-                type = txType,
-                categoryId = 0, // Uncategorized or create a specific one
-                sourceAccountId = account.id,
-                note = "IOU Payment: ${debt.personName}",
-                date = System.currentTimeMillis()
-            )
-            repository.insertTransaction(transaction)
-
-            // insertTransaction already applies the ledger balance effect. Updating the account
-            // here as well would charge/credit the account twice.
-            SyncWorker.enqueueNow(getApplication())
+            applyDebtPayment(debt, paymentAmount, account, System.currentTimeMillis())
         }
+    }
+
+    /**
+     * Records a repayment against [debt], moves [account]'s balance with it, and returns the id of
+     * the ledger row so a caller that may have to undo the whole approval can hold on to it.
+     *
+     * The movement is a balance adjustment rather than an income or expense. Repaying a loan you
+     * took is not spending and being repaid on one you made is not earning — money that was only
+     * ever passing through was landing in the envelope and income totals, which is the same reason
+     * [createIouFromSms] records the principal this way.
+     */
+    private suspend fun applyDebtPayment(
+        debt: Debt,
+        paymentAmount: Double,
+        account: Account,
+        date: Long
+    ): Long {
+        val newPaidAmount = debt.paidAmount + paymentAmount
+        repository.updateDebt(
+            debt.copy(
+                paidAmount = newPaidAmount,
+                isSettled = newPaidAmount >= debt.amount
+            )
+        )
+
+        // Money in when they repay a loan you made, money out when you repay one you took.
+        val loggedId = repository.postBalanceAdjustment(
+            accountId = account.id,
+            delta = if (debt.type == DebtType.LENT) paymentAmount else -paymentAmount,
+            note = "IOU Payment: ${debt.personName}",
+            date = date
+        )
+
+        SyncWorker.enqueueNow(getApplication())
+        return loggedId
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        // The price service owns an HTTP client with its own connection and thread pools.
+        stockPriceService.close()
     }
 
     // --- Tags ---
@@ -1915,6 +2177,19 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch { repository.deleteMerchantRule(merchantKey) }
     }
 
+    /**
+     * Undoes whatever an alert was previously filed as, so re-filing it can't leave the old
+     * transaction behind or strand the alert it was paired with.
+     *
+     * Every approval path runs this first. Only the transfer path used to, which meant re-filing
+     * an alert any other way — or restoring one that had been approved and then ignored — logged
+     * the amount a second time and orphaned the first row.
+     */
+    private suspend fun clearPreviousFiling(smsTransaction: SmsTransaction) {
+        repository.revokeLoggedTransaction(smsTransaction)
+        repository.detachSmsPartner(smsTransaction)
+    }
+
     fun approveSmsTransaction(
         smsTransaction: SmsTransaction,
         categoryId: Long,
@@ -1922,9 +2197,21 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         note: String = "",
         txTypeOverride: TransactionType? = null
     ) {
-        viewModelScope.launch {
         val amount = com.example.financemanager.domain.SmsAmountFormatter.number(smsTransaction.amount)
             .toDoubleOrNull() ?: 0.0
+        // An alert whose amount didn't parse has nothing to log. Approving it anyway wrote a zero
+        // transaction, marked the alert resolved and taught a merchant rule off it — all three
+        // silently. The sibling approval paths already refused this; this one was the gap.
+        if (amount <= 0.0 || accountId <= 0L) {
+            _smsApprovalError.value = if (amount <= 0.0) {
+                "Couldn't read an amount from this alert. Log it by hand instead."
+            } else {
+                "Pick the account this money moved through."
+            }
+            return
+        }
+        viewModelScope.launch {
+            clearPreviousFiling(smsTransaction)
             val txType = txTypeOverride ?: if (smsTransaction.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE
 
             val finalNote = note.ifEmpty {
@@ -1983,6 +2270,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     ) {
         if (accountId <= 0 || personName.isBlank() || amount <= 0.0) return
         viewModelScope.launch {
+            clearPreviousFiling(smsTransaction)
             val type = if (smsTransaction.type == "credit") DebtType.BORROWED else DebtType.LENT
             val cleanName = personName.trim()
             val cleanNotes = notes.trim().ifEmpty { "Created from bank SMS" }
@@ -1995,9 +2283,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     notes = cleanNotes
                 )
             )
-            val loggedId = repository.postLedgerSideEffect(
+            // Borrowing puts money into the account; lending takes it out.
+            val loggedId = repository.postBalanceAdjustment(
                 accountId = accountId,
-                amount = if (type == DebtType.BORROWED) amount else -amount,
+                delta = if (type == DebtType.BORROWED) amount else -amount,
                 note = "IOU with $cleanName",
                 date = smsTransaction.rawTimestamp
             )
@@ -2010,6 +2299,67 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     loggedTransactionId = loggedId
                 )
             )
+            SyncWorker.enqueueNow(getApplication())
+        }
+    }
+
+    /**
+     * Logs a single alert as a transfer between the user's own accounts.
+     *
+     * The matched-pair flow needs both legs, but plenty of self transfers only ever produce one
+     * alert — the receiving bank stays quiet, or its SMS never arrives — so the debit sits in the
+     * inbox with nothing to pair it with and approving it counts the move as spending. Here the
+     * user names the other side themselves and the lone alert becomes exactly the TRANSFER row a
+     * matched pair would have produced: no envelope, no effect on net worth.
+     *
+     * [smsTransaction] is whichever leg the bank did send, so a credit alert names the
+     * destination and a debit alert the source; the account the user picked is the silent side.
+     * Anything this alert was already logged as is revoked first, so re-filing an expense as a
+     * transfer doesn't leave the spending behind.
+     */
+    fun approveSmsAsTransfer(
+        smsTransaction: SmsTransaction,
+        fromAccountId: Long,
+        toAccountId: Long,
+        note: String = ""
+    ) {
+        if (fromAccountId <= 0 || toAccountId <= 0 || fromAccountId == toAccountId) return
+        val amount = com.example.financemanager.domain.SmsAmountFormatter.number(smsTransaction.amount)
+            .toDoubleOrNull() ?: 0.0
+        if (amount <= 0.0) return
+        viewModelScope.launch {
+            clearPreviousFiling(smsTransaction)
+
+            val fromName = accounts.value.find { it.id == fromAccountId }?.name ?: "account"
+            val toName = accounts.value.find { it.id == toAccountId }?.name ?: "account"
+            val loggedId = repository.insertTransaction(
+                Transaction(
+                    amount = amount,
+                    type = TransactionType.TRANSFER,
+                    categoryId = 0L,
+                    sourceAccountId = fromAccountId,
+                    destinationAccountId = toAccountId,
+                    note = note.ifEmpty { "Self transfer: $fromName to $toName" },
+                    date = smsTransaction.rawTimestamp,
+                    isAutoLogged = true,
+                    isVerified = true
+                )
+            )
+
+            // The alert is filed against its own side of the move — the side the bank actually
+            // told us about. No merchant rule is learned: a transfer has no envelope to remember.
+            repository.updateSmsTransaction(
+                smsTransaction.copy(
+                    isApproved = true,
+                    isIgnored = false,
+                    approvedCategoryId = 0L,
+                    approvedAccountId = if (smsTransaction.type == "credit") toAccountId else fromAccountId,
+                    loggedTransactionId = loggedId,
+                    linkedSmsId = 0,
+                    resolution = RESOLUTION_TRANSFER
+                )
+            )
+
             SyncWorker.enqueueNow(getApplication())
         }
     }
@@ -2030,8 +2380,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     ) {
         if (fromAccountId <= 0 || toAccountId <= 0 || fromAccountId == toAccountId) return
         viewModelScope.launch {
-            repository.revokeLoggedTransaction(link.debit)
-            repository.revokeLoggedTransaction(link.credit)
+            clearPreviousFiling(link.debit)
+            clearPreviousFiling(link.credit)
 
             val fromName = accounts.value.find { it.id == fromAccountId }?.name ?: "account"
             val toName = accounts.value.find { it.id == toAccountId }?.name ?: "account"
@@ -2088,8 +2438,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
      */
     fun resolveSmsLinkAsReversal(link: SmsLink) {
         viewModelScope.launch {
-            repository.revokeLoggedTransaction(link.debit)
-            repository.revokeLoggedTransaction(link.credit)
+            clearPreviousFiling(link.debit)
+            clearPreviousFiling(link.credit)
 
             repository.updateSmsTransaction(
                 link.debit.copy(
@@ -2134,14 +2484,22 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         account: Account
     ) {
         viewModelScope.launch {
-            recordDebtPayment(debt, paymentAmount, account)
-            
+            // Dated and linked like every other approval: the payment carries the alert's own
+            // timestamp, and the row it created is remembered so undoing the approval can find it.
+            // Stamping it with "now" instead left nothing that [revokeLoggedTransaction] could
+            // match, so the payment survived the undo.
+            clearPreviousFiling(smsTransaction)
+            val loggedId = applyDebtPayment(debt, paymentAmount, account, smsTransaction.rawTimestamp)
+
             repository.updateSmsTransaction(
                 smsTransaction.copy(
                     isApproved = true,
                     isIgnored = false,
                     approvedCategoryId = 0L,
-                    approvedAccountId = account.id
+                    approvedAccountId = account.id,
+                    loggedTransactionId = loggedId,
+                    linkedSmsId = 0,
+                    resolution = ""
                 )
             )
             SyncWorker.enqueueNow(getApplication())
@@ -2155,9 +2513,26 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Brings an ignored alert back to the inbox as pending.
+     *
+     * An alert that was approved before it was ignored still owns the transaction that approval
+     * created, so clearing [SmsTransaction.isApproved] on its own left the transaction in place
+     * with nothing pointing at it — and the alert, now pending again, could be approved a second
+     * time for the same money.
+     */
     fun unignoreSmsTransaction(smsTransaction: SmsTransaction) {
         viewModelScope.launch {
-            repository.updateSmsTransaction(smsTransaction.copy(isIgnored = false, isApproved = false))
+            clearPreviousFiling(smsTransaction)
+            repository.updateSmsTransaction(
+                smsTransaction.copy(
+                    isIgnored = false,
+                    isApproved = false,
+                    loggedTransactionId = 0L,
+                    linkedSmsId = 0L,
+                    resolution = ""
+                )
+            )
             SyncWorker.enqueueNow(getApplication())
         }
     }
@@ -2389,6 +2764,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     private fun buildSmsHash(sender: String, body: String, timestamp: Long): String {
         val digest = java.security.MessageDigest.getInstance("SHA-256")
         val hashBytes = digest.digest("$sender|$body|$timestamp".toByteArray())
-        return hashBytes.joinToString("") { "%02x".format(it) }
+        // Locale.ROOT: "%02x" with the default locale renders its digits in whatever numbering
+        // system the device is set to, so the same message would hash differently after a locale
+        // change and the dedupe index would stop recognising it.
+        return hashBytes.joinToString("") { String.format(java.util.Locale.ROOT, "%02x", it) }
     }
 }

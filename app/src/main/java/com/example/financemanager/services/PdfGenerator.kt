@@ -22,6 +22,16 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.absoluteValue
 
+/**
+ * What came of a report export. The caller has to be able to tell "privacy mode stopped this"
+ * apart from "something went wrong", because only one of them is worth an error message.
+ */
+sealed interface PdfExportResult {
+    data class Saved(val path: String) : PdfExportResult
+    data object BlockedByPrivacyMode : PdfExportResult
+    data object Failed : PdfExportResult
+}
+
 object PdfGenerator {
 
     fun generateMonthlyReport(

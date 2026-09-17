@@ -21,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,10 +61,10 @@ fun NetWorthScreen(
     onNavigateBack: () -> Unit
 ) {
     val haptic = LocalHapticFeedback.current
-    val accounts by viewModel.accounts.collectAsState()
-    val debts by viewModel.debts.collectAsState()
-    val netWorthHistory by viewModel.netWorthHistory.collectAsState()
-    val monthlySpent by viewModel.monthlyExpenseTotal.collectAsState()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val debts by viewModel.debts.collectAsStateWithLifecycle()
+    val netWorthHistory by viewModel.netWorthHistory.collectAsStateWithLifecycle()
+    val monthlySpent by viewModel.monthlyExpenseTotal.collectAsStateWithLifecycle()
 
     var selectedFilter by remember { mutableStateOf(NetWorthPeriodFilter.SIX_MONTHS) }
 
@@ -155,7 +156,7 @@ fun NetWorthScreen(
                                 modifier = Modifier.size(14.dp)
                             )
                             Text(
-                                text = "${if (isPositive) "+" else ""}${moneyString(diff)} (${String.format("%.1f", percentageDiff)}%) ${selectedFilter.label}",
+                                text = "${if (isPositive) "+" else ""}${moneyString(diff)} (${String.format(java.util.Locale.US, "%.1f", percentageDiff)}%) ${selectedFilter.label}",
                                 style = Typography.labelSmall.copy(
                                     color = if (isPositive) AccentGreen else AlertRed,
                                     fontWeight = FontWeight.Bold
@@ -316,14 +317,14 @@ fun NetWorthScreen(
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(AccentGreen))
                                 Text(
-                                    "Assets (${String.format("%.0f", (totalAssets / totalCombined) * 100)}%)",
+                                    "Assets (${String.format(java.util.Locale.US, "%.0f", (totalAssets / totalCombined) * 100)}%)",
                                     style = Typography.labelSmall.copy(color = TextSecondary)
                                 )
                             }
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(AlertRed))
                                 Text(
-                                    "Liabilities (${String.format("%.0f", (totalLiabilities / totalCombined) * 100)}%)",
+                                    "Liabilities (${String.format(java.util.Locale.US, "%.0f", (totalLiabilities / totalCombined) * 100)}%)",
                                     style = Typography.labelSmall.copy(color = TextSecondary)
                                 )
                             }
@@ -440,7 +441,7 @@ fun NetWorthScreen(
                                     style = Typography.labelMedium.copy(color = TextSecondary, fontWeight = FontWeight.SemiBold)
                                 )
                                 Text(
-                                    "${String.format("%.1f", milestoneProgress * 100)}%",
+                                    "${String.format(java.util.Locale.US, "%.1f", milestoneProgress * 100)}%",
                                     style = Typography.labelMedium.copy(color = PrimaryViolet, fontWeight = FontWeight.Bold)
                                 )
                             }

@@ -4,12 +4,20 @@ import android.content.Context
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.example.financemanager.domain.AccountLedger
+import com.example.financemanager.core.FinancePreferences
 import com.example.financemanager.data.*
+import com.example.financemanager.domain.RecurringScheduler
 import com.example.financemanager.ui.components.moneyString
-import kotlinx.coroutines.flow.first
-import java.util.Calendar
+import com.example.financemanager.data.TransactionType
 
+/**
+ * The daily pass that executes recurring templates.
+ *
+ * The execution itself lives in [RecurringScheduler], which the app also runs on every launch.
+ * This worker used to carry its own copy of that logic, and the copies disagreed — see the class
+ * comment on the scheduler. All this one does now is provide the trigger and turn what came back
+ * into notifications, which is the only part that needs Android.
+ */
 class RecurringTransactionWorker(
     appContext: Context,
     workerParams: WorkerParameters
@@ -18,15 +26,16 @@ class RecurringTransactionWorker(
     override suspend fun doWork(): Result {
         try {
             Log.d("RecurringWorker", "Starting auto-execution check...")
-            val db = FinanceDatabase.getDatabase(applicationContext)
-            val dao = db.financeDao()
-            
-            // Get all recurring transactions
-            val recurringList = dao.getRecurringTransactionsList()
-            val now = System.currentTimeMillis()
+            // This worker can be what starts the process, so the currency symbol and the privacy
+            // flag both have to be loaded before anything formats an amount for a notification.
+            FinancePreferences.init(applicationContext)
+            val dao = FinanceDatabase.getDatabase(applicationContext).financeDao()
 
-            val upcoming = recurringList.filter {
-                !it.isPaused && !it.isAutoLog && it.nextExecutionDate in now..(now + 2 * 24 * 60 * 60 * 1000L)
+            // Bills the user has to pay by hand, landing within the next two days.
+            val now = System.currentTimeMillis()
+            val upcoming = dao.getRecurringTransactionsList().filter {
+                !it.isPaused && !it.isAutoLog && it.type == TransactionType.EXPENSE &&
+                    it.nextExecutionDate in now..(now + 2 * 24 * 60 * 60 * 1000L)
             }
             if (upcoming.isNotEmpty()) {
                 NotificationHelper.notifyUpcomingBills(
@@ -36,67 +45,20 @@ class RecurringTransactionWorker(
                     upcoming.first().note.ifBlank { "Recurring payment" }
                 )
             }
-            
-            var executedCount = 0
 
-            for (rt in recurringList) {
-                if (rt.isPaused) continue
-
-                if (rt.nextExecutionDate <= now) {
-                    if (rt.isAutoLog) {
-                        // Guard against double-applying: FinanceViewModel also runs
-                        // RecurringScheduler on every app open, which can race this worker for
-                        // the same due recurring transaction. postIfNew is idempotent — an
-                        // already-logged occurrence is neither re-inserted nor re-charged.
-                        AccountLedger.postIfNew(
-                            dao,
-                            Transaction(
-                                amount = rt.amount,
-                                type = rt.type,
-                                categoryId = rt.categoryId,
-                                sourceAccountId = rt.accountId,
-                                note = rt.note.ifEmpty { "Auto-logged recurring" },
-                                date = rt.nextExecutionDate,
-                                isRecurring = true,
-                                recurringId = rt.id,
-                                isAutoLogged = true
-                            )
-                        )
-                    } else {
-                        // Just send a reminder notification
-                        com.example.financemanager.services.NotificationHelper.notifyReminder(
-                            applicationContext,
-                            rt.id,
-                            "Reminder: ${rt.note.ifEmpty { "Recurring Payment" }}",
-                            "A payment of ${moneyString(rt.amount, false)} is due today!"
-                        )
-                    }
-
-                    // Update the next execution date
-                    val cal = Calendar.getInstance().apply { timeInMillis = rt.nextExecutionDate }
-                    when (rt.interval) {
-                        RecurringInterval.DAILY -> cal.add(Calendar.DAY_OF_YEAR, 1)
-                        RecurringInterval.WEEKLY -> cal.add(Calendar.WEEK_OF_YEAR, 1)
-                        RecurringInterval.MONTHLY -> cal.add(Calendar.MONTH, 1)
-                        RecurringInterval.YEARLY -> cal.add(Calendar.YEAR, 1)
-                    }
-                    
-                    // Catch up if it was missed for a long time
-                    while (cal.timeInMillis <= now) {
-                        when (rt.interval) {
-                            RecurringInterval.DAILY -> cal.add(Calendar.DAY_OF_YEAR, 1)
-                            RecurringInterval.WEEKLY -> cal.add(Calendar.WEEK_OF_YEAR, 1)
-                            RecurringInterval.MONTHLY -> cal.add(Calendar.MONTH, 1)
-                            RecurringInterval.YEARLY -> cal.add(Calendar.YEAR, 1)
-                        }
-                    }
-
-                    dao.updateRecurringTransaction(rt.copy(nextExecutionDate = cal.timeInMillis))
-                    executedCount++
-                }
+            // Anything already due: auto-logging templates are written by the scheduler, and what
+            // comes back is the set that needs a human.
+            val reminders = RecurringScheduler.checkAndLogRecurringTransactions(dao, now)
+            reminders.forEach { reminder ->
+                NotificationHelper.notifyReminder(
+                    applicationContext,
+                    reminder.recurringId,
+                    "Reminder: ${reminder.note}",
+                    "A payment of ${moneyString(reminder.amount)} is due today!"
+                )
             }
 
-            Log.d("RecurringWorker", "Executed $executedCount recurring transactions.")
+            Log.d("RecurringWorker", "Recurring pass done; ${reminders.size} reminder(s) raised.")
             return Result.success()
         } catch (e: Exception) {
             Log.e("RecurringWorker", "Error executing recurring transactions", e)

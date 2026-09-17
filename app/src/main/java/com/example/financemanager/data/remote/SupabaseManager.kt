@@ -10,9 +10,13 @@ import io.github.jan.supabase.postgrest.Postgrest
 /**
  * Single entry point for the Supabase backend.
  *
- * Uses the client-safe publishable key (all access goes through Row-Level Security).
- * Auth is anonymous + device-based: on first launch we create an anonymous user; the
- * session is persisted by the Auth plugin so the same identity survives app restarts.
+ * Uses the client-safe publishable key. That key is readable in any copy of the APK, so it is
+ * Row-Level Security on the Supabase project — not the key — that keeps one user out of
+ * another's rows. The README carries the policy SQL; without it every row is world-readable.
+ *
+ * Auth is anonymous + device-based: on first launch we create an anonymous user, and the Auth
+ * plugin persists the session itself (autoLoadFromStorage/autoSaveToStorage are on by default),
+ * so the same identity survives app restarts.
  */
 object SupabaseManager {
 
@@ -32,37 +36,20 @@ object SupabaseManager {
 
     /**
      * Ensures there is a signed-in (anonymous) session, creating one on first launch.
-     * Returns the user id, or null if Supabase isn't configured / sign-in failed.
+     *
+     * There used to be a second copy of the access and refresh tokens here, written to a
+     * SharedPreferences file in plaintext and re-imported on the next launch. It bought nothing:
+     * awaitInitialization already restores the session the Auth plugin saved for itself. All the
+     * copy did was put a second set of live credentials on disk, so it is gone.
      */
-    suspend fun ensureSignedIn(context: android.content.Context): String? {
+    suspend fun ensureSignedIn(): String? {
         if (!isConfigured) return null
-        val prefs = context.getSharedPreferences("supabase_session", android.content.Context.MODE_PRIVATE)
         return try {
             val auth = client.auth
+            // Restores whatever session the plugin persisted, if any.
             auth.awaitInitialization()
-            
-            if (auth.currentSessionOrNull() == null) {
-                val savedAccessToken = prefs.getString("access_token", null)
-                val savedRefreshToken = prefs.getString("refresh_token", null)
-                
-                if (savedAccessToken != null && savedRefreshToken != null) {
-                    try {
-                        auth.importAuthToken(savedAccessToken, savedRefreshToken)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                    }
-                }
-            }
-            
             if (auth.currentSessionOrNull() == null) {
                 auth.signInAnonymously()
-                val session = auth.currentSessionOrNull()
-                if (session != null) {
-                    prefs.edit()
-                        .putString("access_token", session.accessToken)
-                        .putString("refresh_token", session.refreshToken)
-                        .apply()
-                }
             }
             auth.currentUserOrNull()?.id
         } catch (e: Exception) {

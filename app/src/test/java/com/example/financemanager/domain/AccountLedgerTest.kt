@@ -178,6 +178,65 @@ class AccountLedgerTest {
     }
 
     @Test
+    fun aNegativeAdjustmentTakesMoneyOutAndAPositiveOnePutsItIn() = runTest {
+        val store = FakeLedgerStore().apply { addAccount(1L, balance = 1_000.0) }
+
+        // Buying an investment, lending a friend their share of a bill: money leaves.
+        AccountLedger.postBalanceAdjustment(store, 1L, -300.0, "bought units", 1L)
+        assertEquals(700.0, store.balanceOf(1L), 0.001)
+
+        // Selling it, or being repaid: money arrives.
+        AccountLedger.postBalanceAdjustment(store, 1L, 450.0, "sold units", 2L)
+        assertEquals(1_150.0, store.balanceOf(1L), 0.001)
+    }
+
+    @Test
+    fun anAdjustmentNeverWritesANegativeAmount() = runTest {
+        val store = FakeLedgerStore().apply { addAccount(1L, balance = 1_000.0) }
+
+        val outId = AccountLedger.postBalanceAdjustment(store, 1L, -300.0, "out", 1L)
+        val inId = AccountLedger.postBalanceAdjustment(store, 1L, 450.0, "in", 2L)
+
+        val outflow = store.transactions.first { it.id == outId }
+        val inflow = store.transactions.first { it.id == inId }
+
+        assertEquals(300.0, outflow.amount, 0.001)
+        assertEquals(1L, outflow.sourceAccountId)
+        assertEquals(null, outflow.destinationAccountId)
+
+        // The direction lives in which side the account sits on, not in the sign of the amount.
+        assertEquals(450.0, inflow.amount, 0.001)
+        assertEquals(0L, inflow.sourceAccountId)
+        assertEquals(1L, inflow.destinationAccountId)
+    }
+
+    @Test
+    fun adjustmentsStayInAgreementWithTheLedger() = runTest {
+        val store = FakeLedgerStore().apply { addAccount(1L, balance = 1_000.0) }
+
+        AccountLedger.postBalanceAdjustment(store, 1L, -300.0, "out", 1L)
+        AccountLedger.postBalanceAdjustment(store, 1L, 450.0, "in", 2L)
+
+        // Both directions have to be visible to the sums reconcile derives from, or the next
+        // "Recalculate balances" would treat the adjustment as drift and undo it.
+        assertTrue(AccountLedger.reconcile(store).isEmpty())
+        assertEquals(1_150.0, store.balanceOf(1L), 0.001)
+    }
+
+    @Test
+    fun revokingAnAdjustmentPutsItBackInBothDirections() = runTest {
+        val store = FakeLedgerStore().apply { addAccount(1L, balance = 1_000.0) }
+
+        val outId = AccountLedger.postBalanceAdjustment(store, 1L, -300.0, "out", 1L)
+        val inId = AccountLedger.postBalanceAdjustment(store, 1L, 450.0, "in", 2L)
+
+        AccountLedger.revoke(store, store.transactions.first { it.id == outId })
+        AccountLedger.revoke(store, store.transactions.first { it.id == inId })
+
+        assertEquals(1_000.0, store.balanceOf(1L), 0.001)
+    }
+
+    @Test
     fun rebaseMakesTheCurrentBalanceTheTruth() = runTest {
         val store = FakeLedgerStore().apply { addAccount(1L, balance = 1_000.0) }
         AccountLedger.post(store, expense(250.0))
@@ -189,5 +248,49 @@ class AccountLedgerTest {
         assertEquals(1_150.0, store.accounts.getValue(1L).openingBalance, 0.001)
         assertTrue(AccountLedger.reconcile(store).isEmpty())
         assertEquals(900.0, store.balanceOf(1L), 0.001)
+    }
+
+    @Test
+    fun aZeroAdjustmentWritesNothing() = runTest {
+        val store = FakeLedgerStore().apply { addAccount(1L, balance = 1_000.0) }
+
+        val id = AccountLedger.postBalanceAdjustment(store, 1L, 0.0, "nothing moved", 1L)
+
+        // A zero delta has no side to sit on, so it would land as a transfer belonging to
+        // neither account - a row in the log that moves nothing.
+        assertEquals("0 means no transaction was created", 0L, id)
+        assertTrue(store.transactions.isEmpty())
+        assertEquals(1_000.0, store.balanceOf(1L), 0.001)
+    }
+
+    @Test
+    fun reconcileCanBeNarrowedToSomeAccounts() = runTest {
+        val store = FakeLedgerStore().apply {
+            addAccount(1L, balance = 1_000.0)
+            addAccount(2L, balance = 1_000.0)
+        }
+        // Both balances drift away from what their (empty) ledgers say.
+        store.updateAccount(store.accounts.getValue(1L).copy(balance = 900.0))
+        store.updateAccount(store.accounts.getValue(2L).copy(balance = 800.0))
+
+        val repaired = AccountLedger.reconcile(store, setOf(1L))
+
+        assertEquals(1, repaired.size)
+        assertEquals(1L, repaired.first().account.id)
+        assertEquals("the named account is rebuilt from its ledger", 1_000.0, store.balanceOf(1L), 0.001)
+        assertEquals("the others are left exactly as they were", 800.0, store.balanceOf(2L), 0.001)
+    }
+
+    @Test
+    fun rebaseCanBeNarrowedToSomeAccounts() = runTest {
+        val store = FakeLedgerStore().apply {
+            addAccount(1L, balance = 1_000.0, openingBalance = 0.0)
+            addAccount(2L, balance = 1_000.0, openingBalance = 0.0)
+        }
+
+        AccountLedger.rebaseOpeningBalances(store, setOf(2L))
+
+        assertEquals("untouched account keeps its anchor", 0.0, store.accounts.getValue(1L).openingBalance, 0.001)
+        assertEquals("named account is re-anchored", 1_000.0, store.accounts.getValue(2L).openingBalance, 0.001)
     }
 }

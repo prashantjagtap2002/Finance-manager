@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,7 +51,7 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GroupExpensesContent(viewModel: FinanceViewModel, modifier: Modifier = Modifier) {
-    val groups by viewModel.expenseGroups.collectAsState()
+    val groups by viewModel.expenseGroups.collectAsStateWithLifecycle()
     var selectedGroupId by remember { mutableLongStateOf(0L) }
     var showCreateGroup by remember { mutableStateOf(false) }
     var showAddMember by remember { mutableStateOf(false) }
@@ -65,12 +66,12 @@ fun GroupExpensesContent(viewModel: FinanceViewModel, modifier: Modifier = Modif
 
     val selectedGroup = groups.firstOrNull { it.id == selectedGroupId }
     val members by if (selectedGroup != null) {
-        viewModel.expenseGroupMembers(selectedGroup.id).collectAsState(initial = emptyList())
+        viewModel.expenseGroupMembers(selectedGroup.id).collectAsStateWithLifecycle(initialValue = emptyList())
     } else {
         remember { mutableStateOf(emptyList()) }
     }
     val expenses by if (selectedGroup != null) {
-        viewModel.expenseGroupExpenses(selectedGroup.id).collectAsState(initial = emptyList())
+        viewModel.expenseGroupExpenses(selectedGroup.id).collectAsStateWithLifecycle(initialValue = emptyList())
     } else {
         remember { mutableStateOf(emptyList()) }
     }

@@ -20,6 +20,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,8 +60,8 @@ fun TransactionsByCategoryScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val allTransactions by viewModel.transactions.collectAsState()
-    val accounts by viewModel.accounts.collectAsState()
+    val allTransactions by viewModel.transactions.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -141,7 +142,7 @@ fun TransactionsByCategoryScreen(
             match
         }.sortedByDescending { it.date }
     }
-    val categories by viewModel.categories.collectAsState()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
 
     val category = categories.firstOrNull { it.id == categoryId }
     val categoryName = category?.name ?: "Category"

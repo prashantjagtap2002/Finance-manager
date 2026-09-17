@@ -11,14 +11,21 @@ data class AccountDto(
     val type: String,
     val balance: Double,
     val currency: String,
-    @SerialName("user_id") val userId: String
+    @SerialName("user_id") val userId: String,
+    /**
+     * When the row last changed, so a sync can tell which side is newer. Defaulted because a
+     * Supabase table created before this column existed simply won't send it, and 0 makes every
+     * such row lose to the local copy — which is exactly how the app behaved before.
+     */
+    @SerialName("updatedat") val updatedAt: Long = 0
 ) {
     fun toEntity() = Account(
         id = id,
         name = name,
         type = try { AccountType.valueOf(type) } catch (e: Exception) { AccountType.BANK },
         balance = balance,
-        currency = currency
+        currency = currency,
+        updatedAt = updatedAt
     )
 }
 
@@ -33,7 +40,9 @@ data class CategoryDto(
     @SerialName("rolloveramount") val rolloverAmount: Double,
     @SerialName("isrolloverenabled") val isRolloverEnabled: Boolean,
     @SerialName("displayorder") val displayOrder: Int,
-    @SerialName("user_id") val userId: String
+    @SerialName("user_id") val userId: String,
+    /** See [AccountDto.updatedAt]. */
+    @SerialName("updatedat") val updatedAt: Long = 0
 ) {
     fun toEntity() = Category(
         id = id,
@@ -44,7 +53,8 @@ data class CategoryDto(
         isZeroBased = isZeroBased,
         rolloverAmount = rolloverAmount,
         isRolloverEnabled = isRolloverEnabled,
-        displayOrder = displayOrder
+        displayOrder = displayOrder,
+        updatedAt = updatedAt
     )
 }
 
@@ -67,7 +77,9 @@ data class TransactionDto(
     @SerialName("originalamount") val originalAmount: Double? = null,
     @SerialName("originalcurrency") val originalCurrency: String? = null,
     @SerialName("isverified") val isVerified: Boolean = true,
-    @SerialName("user_id") val userId: String
+    @SerialName("user_id") val userId: String,
+    /** See [AccountDto.updatedAt]. */
+    @SerialName("updatedat") val updatedAt: Long = 0
 ) {
     fun toEntity() = Transaction(
         id = id,
@@ -86,7 +98,8 @@ data class TransactionDto(
         merchantName = merchantName,
         originalAmount = originalAmount,
         originalCurrency = originalCurrency,
-        isVerified = isVerified
+        isVerified = isVerified,
+        updatedAt = updatedAt
     )
 }
 
@@ -100,7 +113,9 @@ data class SavingsGoalDto(
     @SerialName("savedamount") val savedAmount: Double,
     @SerialName("targetdate") val targetDate: Long? = null,
     @SerialName("createdat") val createdAt: Long,
-    @SerialName("user_id") val userId: String
+    @SerialName("user_id") val userId: String,
+    /** See [AccountDto.updatedAt]. */
+    @SerialName("updatedat") val updatedAt: Long = 0
 ) {
     fun toEntity() = SavingsGoal(
         id = id,
@@ -110,7 +125,8 @@ data class SavingsGoalDto(
         targetAmount = targetAmount,
         savedAmount = savedAmount,
         targetDate = targetDate,
-        createdAt = createdAt
+        createdAt = createdAt,
+        updatedAt = updatedAt
     )
 }
 
@@ -127,7 +143,9 @@ data class RecurringTransactionDto(
     @SerialName("nextexecutiondate") val nextExecutionDate: Long,
     @SerialName("isautolog") val isAutoLog: Boolean,
     @SerialName("ispaused") val isPaused: Boolean,
-    @SerialName("user_id") val userId: String
+    @SerialName("user_id") val userId: String,
+    /** See [AccountDto.updatedAt]. */
+    @SerialName("updatedat") val updatedAt: Long = 0
 ) {
     fun toEntity() = RecurringTransaction(
         id = id,
@@ -140,7 +158,8 @@ data class RecurringTransactionDto(
         startDate = startDate,
         nextExecutionDate = nextExecutionDate,
         isAutoLog = isAutoLog,
-        isPaused = isPaused
+        isPaused = isPaused,
+        updatedAt = updatedAt
     )
 }
 
@@ -157,7 +176,9 @@ data class DebtDto(
     val notes: String,
     @SerialName("interestrate") val interestRate: Double? = null,
     @SerialName("minimumpayment") val minimumPayment: Double? = null,
-    @SerialName("user_id") val userId: String
+    @SerialName("user_id") val userId: String,
+    /** See [AccountDto.updatedAt]. */
+    @SerialName("updatedat") val updatedAt: Long = 0
 ) {
     fun toEntity() = Debt(
         id = id,
@@ -170,7 +191,8 @@ data class DebtDto(
         paidAmount = paidAmount,
         notes = notes,
         interestRate = interestRate,
-        minimumPayment = minimumPayment
+        minimumPayment = minimumPayment,
+        updatedAt = updatedAt
     )
 }
 
@@ -192,7 +214,13 @@ data class SmsTransactionDto(
     @SerialName("isignored") val isIgnored: Boolean,
     @SerialName("approvedcategoryid") val approvedCategoryId: Long,
     @SerialName("approvedaccountid") val approvedAccountId: Long,
-    @SerialName("user_id") val userId: String
+    @SerialName("user_id") val userId: String,
+    // Defaulted so a project whose sms_transactions table predates these columns still decodes.
+    @SerialName("loggedtransactionid") val loggedTransactionId: Long = 0,
+    @SerialName("linkedsmsid") val linkedSmsId: Long = 0,
+    val resolution: String = "",
+    /** See [AccountDto.updatedAt]. */
+    @SerialName("updatedat") val updatedAt: Long = 0
 ) {
     fun toEntity() = SmsTransaction(
         id = id,
@@ -210,6 +238,42 @@ data class SmsTransactionDto(
         isApproved = isApproved,
         isIgnored = isIgnored,
         approvedCategoryId = approvedCategoryId,
-        approvedAccountId = approvedAccountId
+        approvedAccountId = approvedAccountId,
+        loggedTransactionId = loggedTransactionId,
+        linkedSmsId = linkedSmsId,
+        resolution = resolution,
+        updatedAt = updatedAt
     )
 }
+
+/**
+ * The alert as it goes to the cloud — **without** the raw message text.
+ *
+ * The parsed fields are what the app actually works from; the body is the original bank SMS, and
+ * uploading it contradicted the promise that message contents stay on the device. It is left on
+ * the device and sent as an empty string, which keeps a NOT NULL column happy without shipping
+ * anything. The only cost is that an alert restored from the cloud can't show its original text.
+ */
+fun SmsTransaction.toDto(userId: String) = SmsTransactionDto(
+    id = id,
+    smsHash = smsHash,
+    sender = sender,
+    body = "",
+    accountName = accountName,
+    type = type,
+    amount = amount,
+    balance = balance,
+    counterparty = counterparty,
+    reference = reference,
+    rawTimestamp = rawTimestamp,
+    createdAt = createdAt,
+    isApproved = isApproved,
+    isIgnored = isIgnored,
+    approvedCategoryId = approvedCategoryId,
+    approvedAccountId = approvedAccountId,
+    userId = userId,
+    loggedTransactionId = loggedTransactionId,
+    linkedSmsId = linkedSmsId,
+    resolution = resolution,
+    updatedAt = updatedAt
+)

@@ -1,12 +1,32 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample backup rules file; uncomment and customize as necessary.
-   See https://developer.android.com/guide/topics/data/autobackup
-   for details.
-   Note: This file is ignored for devices older than API 31
-   See https://developer.android.com/about/versions/12/backup-restore
+   Backup rules for API 30 and below. API 31+ reads data_extraction_rules.xml instead, and the
+   two are kept in step by hand.
 -->
 <full-backup-content>
-    <!-- Holds the Supabase access/refresh tokens in plaintext; excluded so a restored
-         backup can't be used to resume another device's cloud session. -->
+    <!-- The Supabase Auth plugin persists the live session (access + refresh token) into the
+         app's default SharedPreferences file, which is named after the applicationId. Restoring
+         it onto another device would hand that device a working cloud session, so it stays out
+         of the backup and the app simply signs in again. -->
+    <exclude domain="sharedpref" path="com.stack.finance_preferences.xml"/>
+
+    <!-- Left over from the version that kept its own plaintext copy of those tokens. The copy is
+         gone; the exclusion stays so an old file can never be restored either. -->
     <exclude domain="sharedpref" path="supabase_session.xml"/>
+
+    <!-- The Room database is not encrypted and holds every balance, every transaction and the
+         raw text of every bank SMS the app has parsed. Google's backup is encrypted in transit
+         and at rest, but this is still a copy of the user's entire financial history sitting on
+         someone else's server for the convenience of a restore. Until the database itself is
+         encrypted it stays on the device.
+
+         data_extraction_rules.xml keeps it in device-to-device transfer, which is the path that
+         actually matters for a new phone: direct, user-initiated, and never at rest in a cloud. -->
+    <exclude domain="database" path="finance_database"/>
+    <exclude domain="database" path="finance_database-wal"/>
+    <exclude domain="database" path="finance_database-shm"/>
+    <!-- Records that this device has completed a pull, which is what lets a sync delete cloud
+         rows the device no longer has. It must never outlive the database it describes: restored
+         on its own, next to a database that did NOT come back, it would tell the first sync that
+         an empty device is authoritative and the user's cloud data would be deleted to match. -->
+    <exclude domain="sharedpref" path="sync_state.xml"/>
 </full-backup-content>

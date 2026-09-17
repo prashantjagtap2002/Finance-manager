@@ -3,123 +3,102 @@ package com.example.financemanager.services
 import android.app.Notification
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import com.example.financemanager.domain.AccountLedger
 import com.example.financemanager.data.*
-import com.example.financemanager.domain.SmsParser
+import com.example.financemanager.domain.NotificationTransactionParser
+import com.example.financemanager.domain.ParsedNotification
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import java.security.MessageDigest
+import java.util.Locale
 
+/**
+ * Turns payment notifications from banking and wallet apps into pending alerts in the same
+ * approval queue bank SMS lands in.
+ *
+ * It used to write straight to the ledger with [com.example.financemanager.domain.AccountLedger],
+ * guessing an account ("id 1, or id 4 for wallets") and an envelope ("Food & Dining unless the
+ * merchant name says otherwise"). Three things were wrong with that: the ids were assumed rather
+ * than looked up, so they pointed at whatever happened to hold them after a delete or a merge;
+ * a UPI payment that also sends a bank SMS got counted twice, once silently here and once when
+ * the user approved the SMS; and Android reposts a notification whenever it is updated, so the
+ * same payment could be logged again on every repost.
+ *
+ * Routing into the queue fixes all three: the user picks the account and envelope, nothing moves
+ * a balance until they do, and the unique index on [SmsTransaction.smsHash] collapses reposts.
+ * A payment that arrives both here and by SMS now shows up as two pending alerts rather than one
+ * silent transaction and one pending alert — visible, and dismissable with a single tap.
+ */
 class SmsNotificationListenerService : NotificationListenerService() {
 
-    private val serviceScope = CoroutineScope(Dispatchers.IO)
-    
-    data class BankTemplate(
-        val bankName: String,
-        val regex: Regex,
-        val amountGroup: Int,
-        val merchantGroup: Int
-    )
-
-    private val bankTemplates = listOf(
-        // HDFC / General: Spent Rs. 400 at XYZ Store
-        BankTemplate("HDFC", Regex("""(?i)(?:spent|debited|paid|sent)\s*(?:rs\.?|inr|₹)\s*(\d+(?:\.\d{1,2})?)\s*(?:at|to|on)\s*(.+?)(?:\b|using|\s|$)"""), 1, 2),
-        // SBI / General: Rs. 250 Spent at XYZ
-        BankTemplate("SBI", Regex("""(?i)(?:rs\.?|inr|₹)\s*(\d+(?:\.\d{1,2})?)\s*(?:spent|debited|paid|sent)\s*(?:at|to|on)\s*(.+?)(?:\b|using|\s|$)"""), 1, 2),
-        // ICICI / General: Paid XYZ Rs. 150
-        BankTemplate("ICICI", Regex("""(?i)paid\s*(.+?)\s*(?:rs\.?|inr|₹)\s*(\d+(?:\.\d{1,2})?)"""), 2, 1),
-        // Paytm / GPay specific
-        BankTemplate("Paytm/GPay", Regex("""(?i)(?:paid\sto)\s*(.+?)\s*(?:rs\.?|inr|₹)\s*(\d+(?:\.\d{1,2})?)"""), 2, 1)
-    )
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     companion object {
-        // Only notifications from these apps are ever parsed as potential transactions.
-        // Without this allowlist, ANY notification on the device (WhatsApp, games, email,
-        // etc.) whose text happened to match a bank regex — e.g. "spent Rs. 400 at cafe"
-        // forwarded in a chat message — would silently create a real transaction and mutate
-        // a real account balance. Package names cover major Indian bank/UPI/wallet apps.
-        val TRUSTED_PACKAGES = setOf(
-            "com.snapwork.hdfc", "com.hdfcbank.payzapp", "net.one97.paytm",
-            "com.google.android.apps.nbu.paisa.user", // Google Pay
-            "com.phonepe.app",
-            "com.sbi.SBIFreedomPlus", "com.sbi.SBIFreedom", "com.sbi.yono", "com.sbi.retail",
-            "com.msf.kbank.mobile", // Kotak
-            "com.csam.icici.bank.imobile", "com.icicibank.pockets",
-            "in.amazon.mShop.android.shopping", // Amazon (Amazon Pay notifications)
-            "com.amazon.mShop.android.shopping"
-        )
+        /** Kept here for callers that already reference it; the list itself lives with the parser. */
+        val TRUSTED_PACKAGES: Set<String> get() = NotificationTransactionParser.TRUSTED_PACKAGES
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {
         super.onNotificationPosted(sbn)
         if (sbn == null) return
-
-        val packageName = sbn.packageName
-        if (packageName !in TRUSTED_PACKAGES) return
+        if (sbn.packageName !in NotificationTransactionParser.TRUSTED_PACKAGES) return
 
         val extras = sbn.notification.extras
         val title = extras.getString(Notification.EXTRA_TITLE) ?: ""
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
-        val content = "$title $text"
+        val content = "$title $text".trim()
 
-        parseNotificationContent(content, packageName)
+        val parsed = NotificationTransactionParser.parse(content) ?: return
+        capture(sbn, parsed, content)
     }
 
-    fun parseNotificationContent(content: String, sourceApp: String) {
-        // Notification text can look like a payment even when it is a card offer, cashback
-        // campaign, or game promotion. Keep the same high-confidence guard used by SMS import.
-        if (SmsParser.isPromotionalMessage(content)) return
+    override fun onDestroy() {
+        super.onDestroy()
+        serviceScope.cancel()
+    }
 
-        for (template in bankTemplates) {
-            val match = template.regex.find(content)
-            if (match != null && match.groupValues.size > maxOf(template.amountGroup, template.merchantGroup)) {
-                val amountStr = match.groupValues[template.amountGroup]
-                val merchant = match.groupValues[template.merchantGroup]
+    private fun capture(sbn: StatusBarNotification, parsed: ParsedNotification, content: String) {
+        val packageName = sbn.packageName
+        // The notification's own key is stable across the updates Android delivers as reposts, so
+        // hashing it with the text means a repost of the same payment lands on the same hash and
+        // the insert is ignored, while a genuinely new payment gets a new row.
+        val hash = notificationHash(packageName, sbn.key, content)
+        val appLabel = applicationLabel(packageName)
+        val postedAt = sbn.postTime
 
-                val amount = amountStr.toDoubleOrNull() ?: continue
-                val cleanMerchant = merchant.trim().trimEnd('.').take(50)
-
-                // Log the transaction to DB in background
-                serviceScope.launch {
-                    val db = FinanceDatabase.getDatabase(applicationContext)
-                    val dao = db.financeDao()
-
-                    // Try to match category based on merchant name
-                    var categoryId: Long = 1 // Default to Food & Dining (id 1)
-                    
-                    val lowercaseMerchant = cleanMerchant.lowercase()
-                    if (lowercaseMerchant.contains(Regex("cafe|restaurant|food|swiggy|zomato|dining|chai|bakery|canteen"))) {
-                        categoryId = 1 // Food
-                    } else if (lowercaseMerchant.contains(Regex("amazon|flipkart|myntra|zara|shop|mart|retail|mall|supermarket"))) {
-                        categoryId = 2 // Shopping
-                    } else if (lowercaseMerchant.contains(Regex("bill|electricity|airtel|jio|recharge|power|gas|bescom|water"))) {
-                        categoryId = 3 // Utilities
-                    } else if (lowercaseMerchant.contains(Regex("netflix|spotify|hotstar|multiplex|pvr|movie|ticket|bookmyshow"))) {
-                        categoryId = 5 // Entertainment
-                    }
-
-                    // For digital wallets, typically subtract from Digital Wallet account, otherwise Bank account.
-                    val targetAccountId = if (sourceApp.contains("paytm") || sourceApp.contains("wallet")) 4L else 1L
-
-                    if (dao.getAccountById(targetAccountId) != null) {
-                        AccountLedger.post(
-                            dao,
-                            Transaction(
-                                amount = amount,
-                                type = TransactionType.EXPENSE,
-                                categoryId = categoryId,
-                                sourceAccountId = targetAccountId,
-                                note = "Auto-logged from notification: $cleanMerchant",
-                                date = System.currentTimeMillis(),
-                                isAutoLogged = true,
-                                merchantName = cleanMerchant,
-                                isVerified = false
-                            )
-                        )
-                    }
-                }
-                break // Matched, don't check other patterns
-            }
+        serviceScope.launch {
+            val dao = FinanceDatabase.getDatabase(applicationContext).financeDao()
+            val insertedId = dao.insertSmsTransaction(
+                SmsTransaction(
+                    smsHash = hash,
+                    sender = packageName,
+                    body = content,
+                    accountName = appLabel,
+                    // Every template this parser carries matches money going out.
+                    type = "debit",
+                    amount = parsed.amount,
+                    counterparty = parsed.merchant,
+                    rawTimestamp = postedAt
+                )
+            )
+            if (insertedId > 0) SyncWorker.enqueueNow(applicationContext)
         }
+    }
+
+    /** The app's display name, which reads better in the queue than its package name. */
+    private fun applicationLabel(packageName: String): String = runCatching {
+        val pm = packageManager
+        pm.getApplicationLabel(pm.getApplicationInfo(packageName, 0)).toString()
+    }.getOrDefault(packageName)
+
+    private fun notificationHash(packageName: String, key: String, content: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        // Locale.ROOT: "%02x" with the default locale renders its digits in whatever numbering
+        // system the device is set to, so the same message would hash differently after a locale
+        // change and the dedupe index would stop recognising it.
+        return digest.digest("$packageName|$key|$content".toByteArray())
+            .joinToString("") { String.format(Locale.ROOT, "%02x", it) }
     }
 }

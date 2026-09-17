@@ -1,6 +1,7 @@
 package com.example.financemanager.domain
 
 import com.example.financemanager.data.Account
+import com.example.financemanager.data.RecurringTransaction
 import com.example.financemanager.data.Transaction
 
 /**
@@ -33,4 +34,16 @@ interface LedgerStore {
     suspend fun sumSourceEffect(accountId: Long): Double
 
     suspend fun sumIncomingTransfers(accountId: Long): Double
+}
+
+/**
+ * What [RecurringScheduler] needs on top of [LedgerStore]: the templates, and the ability to move
+ * one forward. Kept separate so [LedgerStore] stays the narrow thing [AccountLedger] asks for, and
+ * so the catch-up rules can be tested against an in-memory store rather than a device.
+ */
+interface RecurringStore : LedgerStore {
+
+    suspend fun getRecurringTransactionsList(): List<RecurringTransaction>
+
+    suspend fun updateRecurringTransaction(recurringTransaction: RecurringTransaction)
 }

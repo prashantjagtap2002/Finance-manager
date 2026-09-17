@@ -22,6 +22,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -75,14 +76,14 @@ fun SmsTransactionsScreen(
     showBackButton: Boolean = true,
     onNavigateBack: () -> Unit
 ) {
-    val allTxs by viewModel.smsTransactions.collectAsState()
-    val links by viewModel.smsLinks.collectAsState()
-    val pendingTxs by viewModel.pendingSmsTransactions.collectAsState()
-    val ignoredTxs by viewModel.ignoredSmsTransactions.collectAsState()
-    val approvedTxs by viewModel.approvedSmsTransactions.collectAsState()
-    val accounts by viewModel.accounts.collectAsState()
-    val categories by viewModel.categories.collectAsState()
-    val debts by viewModel.debts.collectAsState()
+    val allTxs by viewModel.smsTransactions.collectAsStateWithLifecycle()
+    val links by viewModel.smsLinks.collectAsStateWithLifecycle()
+    val pendingTxs by viewModel.pendingSmsTransactions.collectAsStateWithLifecycle()
+    val ignoredTxs by viewModel.ignoredSmsTransactions.collectAsStateWithLifecycle()
+    val approvedTxs by viewModel.approvedSmsTransactions.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val debts by viewModel.debts.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -139,11 +140,18 @@ fun SmsTransactionsScreen(
             }
         }
     )
-    val historicalImportResult by viewModel.historicalImportResult.collectAsState()
+    val historicalImportResult by viewModel.historicalImportResult.collectAsStateWithLifecycle()
     LaunchedEffect(historicalImportResult) {
         historicalImportResult?.let { message ->
             notify(message)
             viewModel.clearHistoricalImportResult()
+        }
+    }
+    val smsApprovalError by viewModel.smsApprovalError.collectAsStateWithLifecycle()
+    LaunchedEffect(smsApprovalError) {
+        smsApprovalError?.let { message ->
+            notify(message)
+            viewModel.clearSmsApprovalError()
         }
     }
     val smsPermissionLauncher = rememberLauncherForActivityResult(
@@ -405,6 +413,12 @@ fun SmsTransactionsScreen(
                 } else {
                     notify("Pick an account and an envelope first")
                 }
+            },
+            onConfirmTransfer = { fromId, toId, transferNote ->
+                viewModel.approveSmsAsTransfer(tx, fromId, toId, transferNote)
+                showApproveDialog = null
+                haptic.performHapticFeedback(HapticFeedbackType.Confirm)
+                notify("Logged as a self transfer")
             },
             onConfirmDebt = { debt, paymentAmount ->
                 val account = accounts.find { it.id == selectedAccountId } ?: accounts.firstOrNull()
@@ -933,6 +947,7 @@ private fun ApproveSmsDialog(
     onCategoryChange: (Long) -> Unit,
     onNoteChange: (String) -> Unit,
     onConfirmStandard: (TransactionType?) -> Unit,
+    onConfirmTransfer: (Long, Long, String) -> Unit,
     onConfirmDebt: (Debt, Double) -> Unit,
     onCreateIou: (String, Double, String) -> Unit,
     onDismiss: () -> Unit
@@ -941,6 +956,7 @@ private fun ApproveSmsDialog(
     var validationError by remember { mutableStateOf<String?>(null) }
     var accountExpanded by remember { mutableStateOf(false) }
     var categoryExpanded by remember { mutableStateOf(false) }
+    var counterExpanded by remember { mutableStateOf(false) }
     var debtExpanded by remember { mutableStateOf(false) }
 
     // A credit is normally money coming back from somebody who owes the user; a debit is
@@ -953,6 +969,17 @@ private fun ApproveSmsDialog(
     var iouAmountStr by remember { mutableStateOf(parsedAmountStr) }
     var selectedDebtId by remember { mutableStateOf<Long>(activeDebts.firstOrNull()?.id ?: 0L) }
     var currentTxType by remember { mutableStateOf(if (tx.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE) }
+    val isTransfer = mode == 0 && currentTxType == TransactionType.TRANSFER
+
+    // The account on the silent side of a self transfer - the one whose bank never sent an alert,
+    // so there is nothing to read it off and the user picks it themselves. Kept different from the
+    // account above, including when that one changes underneath it.
+    var counterAccountId by remember { mutableStateOf(0L) }
+    LaunchedEffect(accounts, selectedAccountId) {
+        if (counterAccountId == 0L || counterAccountId == selectedAccountId) {
+            counterAccountId = accounts.firstOrNull { it.id != selectedAccountId }?.id ?: 0L
+        }
+    }
 
     LaunchedEffect(activeDebts) {
         if (selectedDebtId == 0L && activeDebts.isNotEmpty()) {
@@ -961,7 +988,11 @@ private fun ApproveSmsDialog(
     }
 
     val fieldColors = approveFieldColors()
-    val directionColor = if (currentTxType == TransactionType.INCOME) AccentGreen else AlertRed
+    val directionColor = when {
+        isTransfer -> SecondaryTeal
+        currentTxType == TransactionType.INCOME -> AccentGreen
+        else -> AlertRed
+    }
     val bankInitial = tx.accountName.firstOrNull()?.uppercaseChar() ?: '?'
     val modeTitle = when (mode) {
         1 -> "Settle an IOU"
@@ -975,17 +1006,23 @@ private fun ApproveSmsDialog(
         } else {
             "This payment will be recorded as money lent"
         }
-        else -> if (tx.type == "credit") "Money received · check the account and envelope" else "Money sent · check the account and envelope"
+        else -> if (isTransfer) {
+            "Your own money moving between accounts · no spending, no income"
+        } else if (tx.type == "credit") {
+            "Money received · check the account and envelope"
+        } else {
+            "Money sent · check the account and envelope"
+        }
     }
     val actionLabel = when (mode) {
         1 -> "Settle & log payment"
         2 -> "Create IOU & log"
-        else -> "Approve & log transaction"
+        else -> if (isTransfer) "Log as self transfer" else "Approve & log transaction"
     }
     val actionColor = when (mode) {
         1 -> GoldAccent
         2 -> SecondaryTeal
-        else -> AccentGreen
+        else -> if (isTransfer) SecondaryTeal else AccentGreen
     }
 
     // The platform default dialog width is too narrow for a three-tab toggle, so the window is
@@ -1081,7 +1118,11 @@ private fun ApproveSmsDialog(
                                 }
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Icon(
-                                    if (currentTxType == TransactionType.INCOME) Icons.Default.CallReceived else Icons.Default.CallMade,
+                                    when {
+                                        isTransfer -> Icons.Default.SwapHoriz
+                                        currentTxType == TransactionType.INCOME -> Icons.Default.CallReceived
+                                        else -> Icons.Default.CallMade
+                                    },
                                     contentDescription = null,
                                     tint = directionColor,
                                     modifier = Modifier.size(18.dp)
@@ -1165,12 +1206,47 @@ private fun ApproveSmsDialog(
 
                     if (mode == 0) {
                         SegmentedToggle(
-                            options = listOf("Expense", "Income"),
-                            selectedIndex = if (currentTxType == TransactionType.INCOME) 1 else 0,
-                            onSelect = { currentTxType = if (it == 1) TransactionType.INCOME else TransactionType.EXPENSE },
-                            selectedColors = listOf(AlertRed, AccentGreen),
-                            icons = listOf(Icons.Default.CallMade, Icons.Default.CallReceived)
+                            options = listOf("Expense", "Income", "Transfer"),
+                            selectedIndex = when (currentTxType) {
+                                TransactionType.TRANSFER -> 2
+                                TransactionType.INCOME -> 1
+                                else -> 0
+                            },
+                            onSelect = {
+                                currentTxType = when (it) {
+                                    2 -> TransactionType.TRANSFER
+                                    1 -> TransactionType.INCOME
+                                    else -> TransactionType.EXPENSE
+                                }
+                                validationError = null
+                            },
+                            selectedColors = listOf(AlertRed, AccentGreen, SecondaryTeal),
+                            icons = listOf(Icons.Default.CallMade, Icons.Default.CallReceived, Icons.Default.SwapHoriz)
                         )
+                    }
+
+                    if (isTransfer) {
+                        // The matched-pair card says this when both banks texted. When only one
+                        // did, the same reassurance belongs here.
+                        Surface(
+                            color = SecondaryTeal.copy(alpha = 0.10f),
+                            shape = RoundedCornerShape(12.dp),
+                            border = BorderStroke(1.dp, SecondaryTeal.copy(alpha = 0.25f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(Icons.Default.SwapHoriz, contentDescription = null, tint = SecondaryTeal, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    "Only one bank sent an alert? Name the other account and this " +
+                                        "is logged as a single transfer - both balances move, your " +
+                                        "net worth doesn't.",
+                                    style = Typography.bodySmall.copy(color = TextPrimary, lineHeight = 16.sp)
+                                )
+                            }
+                        }
                     }
 
                     if (mode == 1) {
@@ -1260,7 +1336,15 @@ private fun ApproveSmsDialog(
                             onValueChange = {},
                             readOnly = true,
                             singleLine = true,
-                            label = { Text("Account") },
+                            label = {
+                                Text(
+                                    when {
+                                        !isTransfer -> "Account"
+                                        tx.type == "credit" -> "To (credited)"
+                                        else -> "From (debited)"
+                                    }
+                                )
+                            },
                             leadingIcon = {
                                 Icon(Icons.Default.AccountBalance, contentDescription = null, modifier = Modifier.size(18.dp))
                             },
@@ -1288,7 +1372,56 @@ private fun ApproveSmsDialog(
                         }
                     }
 
-                    if (mode == 0) {
+                    if (isTransfer) {
+                        ExposedDropdownMenuBox(
+                            expanded = counterExpanded,
+                            onExpandedChange = { counterExpanded = !counterExpanded }
+                        ) {
+                            OutlinedTextField(
+                                value = accounts.find { it.id == counterAccountId }?.name ?: "Select account",
+                                onValueChange = {},
+                                readOnly = true,
+                                singleLine = true,
+                                label = {
+                                    Text(if (tx.type == "credit") "From (debited)" else "To (credited)")
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
+                                },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = counterExpanded) },
+                                modifier = Modifier.menuAnchor().fillMaxWidth(),
+                                shape = RoundedCornerShape(12.dp),
+                                colors = fieldColors
+                            )
+                            ExposedDropdownMenu(
+                                expanded = counterExpanded,
+                                onDismissRequest = { counterExpanded = false }
+                            ) {
+                                val others = accounts.filter { it.id != selectedAccountId }
+                                others.forEach { account ->
+                                    DropdownMenuItem(
+                                        text = { Text(account.name) },
+                                        onClick = {
+                                            counterAccountId = account.id
+                                            counterExpanded = false
+                                            validationError = null
+                                        },
+                                        leadingIcon = if (account.id == counterAccountId) {
+                                            { Icon(Icons.Default.Check, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(16.dp)) }
+                                        } else null
+                                    )
+                                }
+                                if (others.isEmpty()) {
+                                    DropdownMenuItem(
+                                        text = { Text("No other account yet") },
+                                        onClick = { counterExpanded = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    if (mode == 0 && !isTransfer) {
                         ExposedDropdownMenuBox(
                             expanded = categoryExpanded,
                             onExpandedChange = { categoryExpanded = !categoryExpanded }
@@ -1388,6 +1521,18 @@ private fun ApproveSmsDialog(
                             } else if (mode == 2) {
                                 val cleanAmt = SmsAmountFormatter.number(iouAmountStr).toDoubleOrNull() ?: 0.0
                                 onCreateIou(iouPersonName, cleanAmt, note)
+                            } else if (isTransfer) {
+                                val fromId = if (tx.type == "credit") counterAccountId else selectedAccountId
+                                val toId = if (tx.type == "credit") selectedAccountId else counterAccountId
+                                when {
+                                    accounts.size < 2 ->
+                                        validationError = "A transfer needs a second account to move the money into."
+                                    fromId <= 0 || toId <= 0 ->
+                                        validationError = "Pick both accounts this money moved between."
+                                    fromId == toId ->
+                                        validationError = "Pick two different accounts."
+                                    else -> onConfirmTransfer(fromId, toId, note)
+                                }
                             } else {
                                 onConfirmStandard(currentTxType)
                             }

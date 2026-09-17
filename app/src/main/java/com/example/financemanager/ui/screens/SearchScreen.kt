@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.SearchOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -36,9 +37,14 @@ fun SearchScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategoryId by remember { mutableStateOf<Long?>(null) }
     
-    val isPrivacy by viewModel.isPrivacyMode.collectAsState()
-    val categories by viewModel.categories.collectAsState()
-    val accounts by viewModel.accounts.collectAsState()
+    val isPrivacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+
+    // Indexed once per data change rather than scanned once per visible row: each result was
+    // running a linear search through both lists to find its category and account name.
+    val categoriesById = remember(categories) { categories.associateBy { it.id } }
+    val accountsById = remember(accounts) { accounts.associateBy { it.id } }
 
     // Real-time search query observation
     val searchResults by produceState(
@@ -162,13 +168,13 @@ fun SearchScreen(
                     }
                 } else {
                     items(searchResults, key = { it.id }) { tx ->
-                        val cat = categories.firstOrNull { it.id == tx.categoryId }
+                        val cat = categoriesById[tx.categoryId]
                         val catName = cat?.name ?: "Unknown"
                         val catColor = cat?.colorHex ?: "#888888"
                         
                         TransactionItem(
                             transaction = tx,
-                            accountName = accounts.firstOrNull { it.id == tx.sourceAccountId }?.name ?: "Unknown",
+                            accountName = accountsById[tx.sourceAccountId]?.name ?: "Unknown",
                             categoryName = catName,
                             privacy = isPrivacy,
                             onEdit = { },

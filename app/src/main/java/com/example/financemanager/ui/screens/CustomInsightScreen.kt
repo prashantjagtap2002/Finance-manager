@@ -12,6 +12,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -44,9 +45,9 @@ private data class InsightPoint(val label: String, val value: Double)
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CustomInsightScreen(viewModel: FinanceViewModel, onNavigateBack: () -> Unit) {
-    val transactions by viewModel.transactions.collectAsState()
-    val categories by viewModel.categories.collectAsState()
-    val privacy by viewModel.isPrivacyMode.collectAsState()
+    val transactions by viewModel.transactions.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val privacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
     var visual by remember { mutableStateOf(VisualType.BAR) }
     var metric by remember { mutableStateOf(InsightMetric.SPENDING) }
     var period by remember { mutableStateOf(InsightPeriod.SIX) }

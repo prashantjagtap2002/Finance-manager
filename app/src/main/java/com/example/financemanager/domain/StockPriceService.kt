@@ -16,8 +16,12 @@ import kotlinx.serialization.json.doubleOrNull
  * unofficial free source below can be swapped later (e.g. for Kite Connect) without touching any
  * caller — every caller already treats a `null` result as "keep the last cached price".
  */
-interface StockPriceService {
+interface StockPriceService : java.io.Closeable {
     suspend fun getPrice(symbol: String, exchange: String?): Double?
+
+    /** Releases whatever the implementation holds open. Implementations that hold nothing need
+     *  not override it. */
+    override fun close() {}
 }
 
 /**
@@ -28,7 +32,13 @@ interface StockPriceService {
  */
 class YahooFinanceStockPriceService : StockPriceService {
 
+    // One client for the life of the service, closed with it: an HttpClient owns a connection pool
+    // and a dispatcher thread pool, and the ones created here were never released.
     private val client = HttpClient(OkHttp)
+
+    override fun close() {
+        client.close()
+    }
 
     override suspend fun getPrice(symbol: String, exchange: String?): Double? {
         val yahooSymbol = when (exchange?.uppercase()) {

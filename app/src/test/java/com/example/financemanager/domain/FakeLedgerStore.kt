@@ -2,16 +2,19 @@ package com.example.financemanager.domain
 
 import com.example.financemanager.data.Account
 import com.example.financemanager.data.AccountType
+import com.example.financemanager.data.RecurringTransaction
 import com.example.financemanager.data.Transaction
 import com.example.financemanager.data.TransactionType
 
 /**
- * In-memory [LedgerStore] for the balance tests. The sum queries mirror the SQL in `FinanceDao`
- * so the reconciliation tests exercise the same definition of "what the transactions add up to".
+ * In-memory [RecurringStore] for the balance and recurring tests. The sum queries mirror the SQL
+ * in `FinanceDao` so the reconciliation tests exercise the same definition of "what the
+ * transactions add up to".
  */
-class FakeLedgerStore : LedgerStore {
+class FakeLedgerStore : RecurringStore {
 
     val accounts = mutableMapOf<Long, Account>()
+    val recurring = mutableMapOf<Long, RecurringTransaction>()
     val transactions = mutableListOf<Transaction>()
     private var nextTransactionId = 1L
 
@@ -73,4 +76,11 @@ class FakeLedgerStore : LedgerStore {
     override suspend fun sumIncomingTransfers(accountId: Long): Double =
         transactions.filter { it.destinationAccountId == accountId && it.type == TransactionType.TRANSFER }
             .sumOf { it.amount }
+
+    override suspend fun getRecurringTransactionsList(): List<RecurringTransaction> =
+        recurring.values.toList()
+
+    override suspend fun updateRecurringTransaction(recurringTransaction: RecurringTransaction) {
+        recurring[recurringTransaction.id] = recurringTransaction
+    }
 }

@@ -15,6 +15,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,8 +50,8 @@ fun InvestmentsScreen(
     onNavigateBack: () -> Unit,
     onNavigateToDetail: (Long) -> Unit
 ) {
-    val holdings by viewModel.portfolioHoldings.collectAsState()
-    val isRefreshing by viewModel.isRefreshingPrices.collectAsState()
+    val holdings by viewModel.portfolioHoldings.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshingPrices.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
 
     val totalInvested = holdings.sumOf { it.investedAmount }
@@ -299,9 +300,9 @@ fun InvestmentDetailScreen(
     viewModel: FinanceViewModel,
     onNavigateBack: () -> Unit
 ) {
-    val holdings by viewModel.portfolioHoldings.collectAsState()
-    val allTxns by viewModel.investmentTransactions.collectAsState()
-    val accounts by viewModel.accounts.collectAsState()
+    val holdings by viewModel.portfolioHoldings.collectAsStateWithLifecycle()
+    val allTxns by viewModel.investmentTransactions.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
 
     val holding = holdings.firstOrNull { it.investment.id == investmentId }
     val txns = remember(allTxns, investmentId) {

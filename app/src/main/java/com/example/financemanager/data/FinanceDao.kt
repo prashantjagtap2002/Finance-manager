@@ -1,11 +1,11 @@
 package com.example.financemanager.data
 
 import androidx.room.*
-import com.example.financemanager.domain.LedgerStore
+import com.example.financemanager.domain.RecurringStore
 import kotlinx.coroutines.flow.Flow
 
 @Dao
-interface FinanceDao : LedgerStore {
+interface FinanceDao : RecurringStore {
 
     // Accounts
     @Query("SELECT * FROM accounts")
@@ -62,7 +62,21 @@ interface FinanceDao : LedgerStore {
     @Query("SELECT * FROM transactions WHERE date >= :start AND date <= :end ORDER BY date DESC")
     fun getTransactionsBetweenDatesFlow(start: Long, end: Long): Flow<List<Transaction>>
 
-    @Query("SELECT * FROM transactions WHERE note LIKE '%' || :query || '%' OR merchantName LIKE '%' || :query || '%' ORDER BY date DESC")
+    /** One-shot version of the above, for callers with no lifecycle to keep a flow alive. */
+    @Query("SELECT * FROM transactions WHERE date >= :start AND date <= :end ORDER BY date DESC")
+    suspend fun getTransactionsBetweenDates(start: Long, end: Long): List<Transaction>
+
+    /**
+     * Free-text search over notes and merchant names.
+     *
+     * The escape clause is what stops a typed `%` or `_` acting as a wildcard: searching for "%"
+     * used to match every transaction on record, and "50_" matched "500" and "50p" alike. Callers
+     * go through `FinanceRepository.searchTransactions`, which escapes the text to match.
+     */
+    @Query(
+        "SELECT * FROM transactions WHERE note LIKE '%' || :query || '%' ESCAPE '\\' " +
+            "OR merchantName LIKE '%' || :query || '%' ESCAPE '\\' ORDER BY date DESC"
+    )
     fun searchTransactionsFlow(query: String): Flow<List<Transaction>>
 
     @Query("SELECT * FROM transactions WHERE id = :id")
@@ -137,13 +151,13 @@ interface FinanceDao : LedgerStore {
     fun getRecurringTransactionsFlow(): Flow<List<RecurringTransaction>>
 
     @Query("SELECT * FROM recurring_transactions")
-    suspend fun getRecurringTransactionsList(): List<RecurringTransaction>
+    override suspend fun getRecurringTransactionsList(): List<RecurringTransaction>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertRecurringTransaction(recurringTransaction: RecurringTransaction): Long
 
     @Update
-    suspend fun updateRecurringTransaction(recurringTransaction: RecurringTransaction)
+    override suspend fun updateRecurringTransaction(recurringTransaction: RecurringTransaction)
 
     @Delete
     suspend fun deleteRecurringTransaction(recurringTransaction: RecurringTransaction)
@@ -226,6 +240,9 @@ interface FinanceDao : LedgerStore {
     @Query("SELECT * FROM sms_transactions WHERE smsHash = :hash LIMIT 1")
     suspend fun getSmsTransactionByHash(hash: String): SmsTransaction?
 
+    @Query("SELECT * FROM sms_transactions WHERE id = :id LIMIT 1")
+    suspend fun getSmsTransactionById(id: Long): SmsTransaction?
+
     // Check for duplicate transactions based on key fields to prevent UNIQUE constraint errors
     @Query("SELECT * FROM transactions WHERE amount = :amount AND type = :type AND categoryId = :categoryId AND sourceAccountId = :sourceAccountId AND date = :date LIMIT 1")
     override suspend fun findDuplicateTransaction(amount: Double, type: String, categoryId: Long, sourceAccountId: Long, date: Long): Transaction?
@@ -243,6 +260,9 @@ interface FinanceDao : LedgerStore {
     @Query("SELECT * FROM merchant_rules ORDER BY hitCount DESC")
     fun getMerchantRulesFlow(): Flow<List<MerchantRule>>
 
+    @Query("SELECT * FROM merchant_rules")
+    suspend fun getMerchantRulesList(): List<MerchantRule>
+
     @Query("SELECT * FROM merchant_rules WHERE merchantKey = :key LIMIT 1")
     suspend fun getMerchantRule(key: String): MerchantRule?
 
@@ -258,6 +278,9 @@ interface FinanceDao : LedgerStore {
     // Investments (stocks / mutual funds / SIPs)
     @Query("SELECT * FROM investments ORDER BY name ASC")
     fun getInvestmentsFlow(): Flow<List<Investment>>
+
+    @Query("SELECT * FROM investments")
+    suspend fun getInvestmentsList(): List<Investment>
 
     @Query("SELECT * FROM investments WHERE id = :id")
     suspend fun getInvestmentById(id: Long): Investment?
@@ -289,6 +312,15 @@ interface FinanceDao : LedgerStore {
     @Query("DELETE FROM investment_transactions WHERE investmentId = :investmentId")
     suspend fun deleteInvestmentTransactionsFor(investmentId: Long)
 
+    @Query("SELECT * FROM investment_transactions")
+    suspend fun getInvestmentTransactionsList(): List<InvestmentTransaction>
+
+    @Query("DELETE FROM investments")
+    suspend fun clearInvestments()
+
+    @Query("DELETE FROM investment_transactions")
+    suspend fun clearInvestmentTransactions()
+
     // Group expenses
     @Query("SELECT * FROM expense_groups ORDER BY createdAt DESC")
     fun getExpenseGroupsFlow(): Flow<List<ExpenseGroup>>
@@ -302,8 +334,14 @@ interface FinanceDao : LedgerStore {
     @Delete
     suspend fun deleteExpenseGroup(group: ExpenseGroup)
 
+    @Query("SELECT * FROM expense_groups")
+    suspend fun getExpenseGroupsList(): List<ExpenseGroup>
+
     @Query("SELECT * FROM expense_group_members WHERE groupId = :groupId ORDER BY id ASC")
     fun getExpenseGroupMembersFlow(groupId: Long): Flow<List<ExpenseGroupMember>>
+
+    @Query("SELECT * FROM expense_group_members")
+    suspend fun getExpenseGroupMembersList(): List<ExpenseGroupMember>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertExpenseGroupMember(member: ExpenseGroupMember): Long
@@ -316,6 +354,9 @@ interface FinanceDao : LedgerStore {
 
     @Query("SELECT * FROM expense_group_expenses WHERE groupId = :groupId ORDER BY date DESC")
     fun getExpenseGroupExpensesFlow(groupId: Long): Flow<List<ExpenseGroupExpense>>
+
+    @Query("SELECT * FROM expense_group_expenses")
+    suspend fun getExpenseGroupExpensesList(): List<ExpenseGroupExpense>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertExpenseGroupExpense(expense: ExpenseGroupExpense): Long
@@ -335,15 +376,32 @@ interface FinanceDao : LedgerStore {
     @Query("DELETE FROM expense_group_expenses")
     suspend fun clearExpenseGroupExpenses()
 
-    /** Replaces restorable core data atomically so a failed backup import rolls back completely. */
+    /**
+     * Replaces restorable data atomically so a failed backup import rolls back completely.
+     *
+     * Every table the backup carries is cleared here, not just the six the first version knew
+     * about: a restore that left the old holdings and group expenses in place would leave them
+     * pointing at accounts and members the restore had just replaced.
+     */
     @androidx.room.Transaction
     suspend fun replaceBackupData(
         accounts: List<Account>, categories: List<Category>, transactions: List<Transaction>,
-        recurring: List<RecurringTransaction>, goals: List<SavingsGoal>, debts: List<Debt>
+        recurring: List<RecurringTransaction>, goals: List<SavingsGoal>, debts: List<Debt>,
+        investments: List<Investment>, investmentTransactions: List<InvestmentTransaction>,
+        merchantRules: List<MerchantRule>, groups: List<ExpenseGroup>,
+        groupMembers: List<ExpenseGroupMember>, groupExpenses: List<ExpenseGroupExpense>
     ) {
         clearAccounts(); clearCategories(); clearTransactions(); clearRecurringTransactions(); clearSavingsGoals(); clearDebts()
+        clearInvestmentTransactions(); clearInvestments(); clearMerchantRules()
+        clearExpenseGroupExpenses(); clearExpenseGroupMembers(); clearExpenseGroups()
         accounts.forEach { insertAccount(it) }; categories.forEach { insertCategory(it) }
         transactions.forEach { insertTransaction(it) }; recurring.forEach { insertRecurringTransaction(it) }
         goals.forEach { insertSavingsGoal(it) }; debts.forEach { insertDebt(it) }
+        investments.forEach { insertInvestment(it) }
+        investmentTransactions.forEach { insertInvestmentTransaction(it) }
+        merchantRules.forEach { upsertMerchantRule(it) }
+        groups.forEach { insertExpenseGroup(it) }
+        groupMembers.forEach { insertExpenseGroupMember(it) }
+        groupExpenses.forEach { insertExpenseGroupExpense(it) }
     }
 }

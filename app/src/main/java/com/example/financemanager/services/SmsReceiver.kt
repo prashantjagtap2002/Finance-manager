@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
+import java.util.Locale
 
 class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -74,6 +75,9 @@ class SmsReceiver : BroadcastReceiver() {
         val input = "$sender|$body|$timestamp"
         val digest = MessageDigest.getInstance("SHA-256")
         val hashBytes = digest.digest(input.toByteArray())
-        return hashBytes.joinToString("") { "%02x".format(it) }
+        // Locale.ROOT: "%02x" with the default locale renders its digits in whatever numbering
+        // system the device is set to, so the same message would hash differently after a locale
+        // change and the dedupe index would stop recognising it.
+        return hashBytes.joinToString("") { String.format(Locale.ROOT, "%02x", it) }
     }
 }

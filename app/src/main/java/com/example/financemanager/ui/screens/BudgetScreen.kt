@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -51,10 +52,10 @@ fun BudgetScreen(
     onNavigateToCategory: (Long, String, String) -> Unit = { _, _, _ -> },
     showBackButton: Boolean = true
 ) {
-    val categories by viewModel.categories.collectAsState()
-    val transactions by viewModel.transactions.collectAsState()
-    val monthlyCategorySpend by viewModel.monthlyCategorySpend.collectAsState(initial = emptyMap())
-    val isPrivacy by viewModel.isPrivacyMode.collectAsState()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val transactions by viewModel.transactions.collectAsStateWithLifecycle()
+    val monthlyCategorySpend by viewModel.monthlyCategorySpend.collectAsStateWithLifecycle(initialValue = emptyMap())
+    val isPrivacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
 
     // Zero-Based Budget Math
     val totalIncome = transactions

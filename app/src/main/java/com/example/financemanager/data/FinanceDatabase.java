@@ -8,10 +8,11 @@ import androidx.room.RoomDatabase;
 import androidx.room.TypeConverters;
 import androidx.sqlite.db.SupportSQLiteDatabase;
 import androidx.room.migration.Migration;
+import java.security.SecureRandom;
 
 @Database(
     entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class, MerchantRule.class, Investment.class, InvestmentTransaction.class, ExpenseGroup.class, ExpenseGroupMember.class, ExpenseGroupExpense.class},
-    version = 18,
+    version = 20,
     // Exported schemas are what MigrationTestHelper replays old databases against. Without them
     // nothing checks that the hand-written migrations below still agree with the entities.
     exportSchema = true
@@ -261,6 +262,88 @@ public abstract class FinanceDatabase extends RoomDatabase {
         }
     };
 
+    /**
+     * Gives every synced table a last-changed stamp, so a sync can tell which side of a row is
+     * newer instead of only being able to add rows it had never seen before.
+     *
+     * Existing rows are stamped with the upgrade time rather than 0. They are as current as this
+     * device knows how to be, and a cloud row whose own column doesn't exist yet decodes as 0 —
+     * so this device stays authoritative until the server has something newer to say, which is
+     * exactly the behaviour the app had before the column existed.
+     */
+    public static final Migration MIGRATION_18_19 = new Migration(18, 19) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            String[] tables = {
+                "accounts", "categories", "transactions", "savings_goals",
+                "recurring_transactions", "debts", "sms_transactions"
+            };
+            for (String table : tables) {
+                database.execSQL("ALTER TABLE " + table + " ADD COLUMN updatedAt INTEGER NOT NULL DEFAULT 0");
+                database.execSQL("UPDATE " + table + " SET updatedAt = CAST(strftime('%s','now') AS INTEGER) * 1000");
+            }
+        }
+    };
+
+    /** Every table that mints its primary key with AUTOINCREMENT. See {@link #claimIdBand}. */
+    private static final String[] AUTOINCREMENT_TABLES = {
+        "accounts", "categories", "transactions", "savings_goals", "recurring_transactions",
+        "debts", "sms_transactions", "investments", "investment_transactions",
+        "expense_groups", "expense_group_members", "expense_group_expenses"
+    };
+
+    /** How many ids each database gets to itself, and how many such bands there are to pick from. */
+    private static final long ID_BAND_WIDTH = 1_000_000_000L;
+    private static final int ID_BAND_COUNT = 8000;
+
+    /**
+     * Claims a band of primary keys for this database and mints every future id inside it.
+     *
+     * Ids are what the cloud merge matches rows on, and AUTOINCREMENT starts at 1 on every device.
+     * Two devices on one account therefore both hand out 1, 2, 3… for unrelated rows, and the merge
+     * reads them as the same row — one device's coffee silently overwriting the other's rent. That
+     * cannot happen while every install has its own anonymous user, but it is waiting for the day
+     * real auth puts two devices behind one account.
+     *
+     * Pushing SQLite's own sequence counter forward is enough to avoid it: two installs landing in
+     * the same billion-wide band is a 1-in-8000 chance, and a band still has a billion rows of room.
+     * The ids stay well inside the range a Postgres bigint and a JSON number both carry exactly.
+     *
+     * This deliberately does NOT rewrite ids that already exist. Rows written before the band was
+     * claimed keep their low ids, so two databases that both predate this version can still overlap
+     * in their old rows — nothing can fix that without rewriting keys the cloud already knows. The
+     * first sync between any two devices is a restore, where the server wins outright, which is the
+     * same answer that overlap would need anyway.
+     */
+    static void claimIdBand(SupportSQLiteDatabase database) {
+        long band = (1L + new SecureRandom().nextInt(ID_BAND_COUNT)) * ID_BAND_WIDTH;
+        for (String table : AUTOINCREMENT_TABLES) {
+            // sqlite_sequence only carries a row once a table has been inserted into...
+            database.execSQL(
+                "INSERT INTO sqlite_sequence (name, seq) SELECT ?, ? " +
+                    "WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = ?)",
+                new Object[]{table, band, table}
+            );
+            // ...and the counter may only ever move forward. Lowering it would hand out ids that
+            // rows in this very database already hold.
+            database.execSQL(
+                "UPDATE sqlite_sequence SET seq = ? WHERE name = ? AND seq < ?",
+                new Object[]{band, table, band}
+            );
+        }
+    }
+
+    /**
+     * Moves an existing database into its own id band. Nothing about the schema changes — see
+     * {@link #claimIdBand} for what this buys and what it deliberately leaves alone.
+     */
+    public static final Migration MIGRATION_19_20 = new Migration(19, 20) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            claimIdBand(database);
+        }
+    };
+
     public static FinanceDatabase getDatabase(final Context context) {
         if (INSTANCE == null) {
             synchronized (FinanceDatabase.class) {
@@ -270,11 +353,22 @@ public abstract class FinanceDatabase extends RoomDatabase {
                         FinanceDatabase.class,
                         "finance_database"
                     )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
+                    // The migration chain starts at 2: there is no record of what version 1 looked
+                    // like, so no 1 -> 2 migration can be written. Room's answer to a missing
+                    // migration is to throw on open, which for a version-1 database means an app
+                    // that crashes on every launch and can only be fixed by clearing its data —
+                    // the same loss, arrived at through a crash loop. Naming version 1 explicitly
+                    // keeps that recovery automatic without weakening anything above it: every
+                    // other version still has to migrate or fail loudly.
+                    .fallbackToDestructiveMigrationFrom(true, 1)
                     .addCallback(new RoomDatabase.Callback() {
                         @Override
                         public void onCreate(@NonNull SupportSQLiteDatabase db) {
                             super.onCreate(db);
+                            // Before the seeder runs, so even the seed rows are minted inside
+                            // this database's own id band.
+                            claimIdBand(db);
                             DatabaseSeeder.seed(INSTANCE.financeDao());
                         }
                     })

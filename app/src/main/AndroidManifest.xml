@@ -48,14 +48,17 @@
             </intent-filter>
         </service>
 
-        <!-- App Widget Provider -->
+        <!-- App Widget Provider. APPWIDGET_UPDATE has to be listed and the receiver has to be
+             exported for the system to drive the widget at all. The app's own UPDATE_WIDGET action
+             is deliberately NOT in the filter: an action in the filter of an exported receiver is
+             an entry point any installed app can trigger, and this one only ever needs to be sent
+             from inside the app, where an explicit intent reaches it without a filter. -->
         <receiver
             android:name=".services.FinanceWidgetProvider"
             android:label="Finance Manager Stats"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="com.example.financemanager.UPDATE_WIDGET" />
             </intent-filter>
             <meta-data
                 android:name="android.appwidget.provider"

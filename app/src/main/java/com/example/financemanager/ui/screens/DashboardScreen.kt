@@ -26,9 +26,11 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
@@ -81,23 +83,23 @@ fun DashboardScreen(
     onNavigateToSmsTransactions: () -> Unit = {},
     onNavigateToCategory: (Long, Int, Int) -> Unit = { _, _, _ -> }
 ) {
-    val accounts by viewModel.accounts.collectAsState()
-    val categories by viewModel.categories.collectAsState()
-    val transactions by viewModel.transactions.collectAsState()
-    val monthlySpent by viewModel.monthlyExpenseTotal.collectAsState()
-    val monthlyIncome by viewModel.monthlyIncomeTotal.collectAsState()
-    val monthlyCategorySpend by viewModel.monthlyCategorySpend.collectAsState(initial = emptyMap())
-    val cashflowWarning by viewModel.cashflowWarning.collectAsState(initial = null)
-    val streakDays by viewModel.streakDays.collectAsState()
-    val goals by viewModel.savingsGoals.collectAsState()
-    val recurring by viewModel.recurringTransactions.collectAsState()
-    val isPrivacy by viewModel.isPrivacyMode.collectAsState()
-    val safeToSpend by viewModel.safeToSpend.collectAsState(initial = 0.0)
-    val badges by viewModel.unlockedBadges.collectAsState()
-    val aiRecap by viewModel.aiRecapText.collectAsState()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val transactions by viewModel.transactions.collectAsStateWithLifecycle()
+    val monthlySpent by viewModel.monthlyExpenseTotal.collectAsStateWithLifecycle()
+    val monthlyIncome by viewModel.monthlyIncomeTotal.collectAsStateWithLifecycle()
+    val monthlyCategorySpend by viewModel.monthlyCategorySpend.collectAsStateWithLifecycle(initialValue = emptyMap())
+    val cashflowWarning by viewModel.cashflowWarning.collectAsStateWithLifecycle(initialValue = null)
+    val streakDays by viewModel.streakDays.collectAsStateWithLifecycle()
+    val goals by viewModel.savingsGoals.collectAsStateWithLifecycle()
+    val recurring by viewModel.recurringTransactions.collectAsStateWithLifecycle()
+    val isPrivacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
+    val safeToSpend by viewModel.safeToSpend.collectAsStateWithLifecycle(initialValue = 0.0)
+    val badges by viewModel.unlockedBadges.collectAsStateWithLifecycle()
+    val aiRecap by viewModel.aiRecapText.collectAsStateWithLifecycle()
     // Read so the pace calculation below re-runs when the user changes their cycle settings.
-    val payCycleFrequency by viewModel.payCycleFrequency.collectAsState()
-    val payCycleAnchorDay by viewModel.payCycleAnchorDay.collectAsState()
+    val payCycleFrequency by viewModel.payCycleFrequency.collectAsStateWithLifecycle()
+    val payCycleAnchorDay by viewModel.payCycleAnchorDay.collectAsStateWithLifecycle()
 
     var editingTransaction by remember { mutableStateOf<Transaction?>(null) }
     var showInsightsSheet by remember { mutableStateOf(false) }
@@ -372,7 +374,7 @@ fun DashboardScreen(
                     // Net Worth quick action
                     val interactionSource1 = remember { MutableInteractionSource() }
                     val isPressed1 by interactionSource1.collectIsPressedAsState()
-                    val scale1 by animateFloatAsState(
+                    val scale1 = animateFloatAsState(
                         targetValue = if (isPressed1) 0.95f else 1f,
                         animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
                         label = "quickScale1"
@@ -380,7 +382,13 @@ fun DashboardScreen(
                     iOSCard(
                         modifier = Modifier
                             .weight(1f)
-                            .scale(scale1)
+                            // Read inside the layer block rather than unwrapped above it: a press
+                            // used to recompose the whole card — icon, labels and all — on every
+                            // frame of the spring, where scaling it is a draw-phase transform.
+                            .graphicsLayer {
+                                scaleX = scale1.value
+                                scaleY = scale1.value
+                            }
                             .clickable(interactionSource = interactionSource1, indication = null) { onNavigateToNetWorth() }
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
@@ -402,7 +410,7 @@ fun DashboardScreen(
                     // IOU Tracker quick action
                     val interactionSource2 = remember { MutableInteractionSource() }
                     val isPressed2 by interactionSource2.collectIsPressedAsState()
-                    val scale2 by animateFloatAsState(
+                    val scale2 = animateFloatAsState(
                         targetValue = if (isPressed2) 0.95f else 1f,
                         animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
                         label = "quickScale2"
@@ -410,7 +418,13 @@ fun DashboardScreen(
                     iOSCard(
                         modifier = Modifier
                             .weight(1f)
-                            .scale(scale2)
+                            // Read inside the layer block rather than unwrapped above it: a press
+                            // used to recompose the whole card — icon, labels and all — on every
+                            // frame of the spring, where scaling it is a draw-phase transform.
+                            .graphicsLayer {
+                                scaleX = scale2.value
+                                scaleY = scale2.value
+                            }
                             .clickable(interactionSource = interactionSource2, indication = null) { onNavigateToDebt() }
                     ) {
                         Column(modifier = Modifier.padding(16.dp)) {
@@ -1231,11 +1245,7 @@ private fun SpendPaceBar(pace: SpendPace, privacy: Boolean) {
         pace.isOverPace -> WarningAmber
         else -> AccentGreen
     }
-    val animatedUsed by animateFloatAsState(
-        targetValue = pace.usedFraction,
-        animationSpec = tween(durationMillis = 800, easing = EaseOutCubic),
-        label = "spendPace"
-    )
+    val animatedUsed = rememberBarFraction(pace.usedFraction)
 
     Column {
         if (budget != null) {
@@ -1243,15 +1253,15 @@ private fun SpendPaceBar(pace: SpendPace, privacy: Boolean) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(8.dp)
+                    // Kept so the today-notch is still cut off by the pill's rounded ends when the
+                    // cycle is nearly over; the bar itself no longer needs it to get its shape.
                     .clip(CircleShape)
-                    .background(SubtleSurface)
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(animatedUsed)
-                        .fillMaxHeight()
-                        .clip(CircleShape)
-                        .background(barColor)
+                HorizontalBar(
+                    fraction = { animatedUsed.value },
+                    color = barColor,
+                    trackColor = SubtleSurface,
+                    modifier = Modifier.fillMaxSize()
                 )
                 // A zero-width column ending exactly at today, carrying the notch on its edge.
                 Box(modifier = Modifier.fillMaxWidth(pace.elapsedFraction).fillMaxHeight()) {

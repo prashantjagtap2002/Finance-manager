@@ -15,6 +15,7 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,6 +32,7 @@ import com.example.financemanager.core.FinancePreferences
 import com.example.financemanager.core.ThemePreference
 import com.example.financemanager.data.Account
 import com.example.financemanager.data.AccountType
+import com.example.financemanager.services.PdfExportResult
 import com.example.financemanager.services.SyncWorker
 import kotlinx.coroutines.launch
 import com.example.financemanager.theme.*
@@ -58,15 +60,16 @@ fun SettingsScreen(
         }
     }
 
-    val accounts by viewModel.accounts.collectAsState()
-    val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsState()
-    val hasSecurityPin by viewModel.hasSecurityPin.collectAsState()
-    val appLockTimeoutMs by viewModel.appLockTimeoutMs.collectAsState()
-    val isPrivacyMode by viewModel.isPrivacyMode.collectAsState()
-    val currencyCode by viewModel.currencyCode.collectAsState()
-    val themePreference by viewModel.themePreference.collectAsState()
-    val isProUser by viewModel.isProUser.collectAsState()
-    val scanCount by viewModel.scanCount.collectAsState()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val isAppLockEnabled by viewModel.isAppLockEnabled.collectAsStateWithLifecycle()
+    val hasSecurityPin by viewModel.hasSecurityPin.collectAsStateWithLifecycle()
+    val appLockTimeoutMs by viewModel.appLockTimeoutMs.collectAsStateWithLifecycle()
+    val isPrivacyMode by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
+    val isCloudSyncEnabled by FinancePreferences.cloudSyncEnabledFlow.collectAsStateWithLifecycle()
+    val currencyCode by viewModel.currencyCode.collectAsStateWithLifecycle()
+    val themePreference by viewModel.themePreference.collectAsStateWithLifecycle()
+    val isProUser by viewModel.isProUser.collectAsStateWithLifecycle()
+    val scanCount by viewModel.scanCount.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val syncStatus by produceState("Automatic sync is enabled every 12 hours", context) {
         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -492,22 +495,44 @@ fun SettingsScreen(
                             style = Typography.bodyLarge.copy(fontWeight = FontWeight.Bold)
                         )
                         Text(
-                            text = "Manually trigger a sync to back up your local database to Supabase Postgres.",
+                            text = "Back up your accounts, envelopes and transactions to Supabase Postgres. " +
+                                "The text of your bank messages never leaves the device.",
                             style = Typography.bodyMedium.copy(color = TextSecondary)
                         )
-                        Text(syncStatus, style = Typography.labelMedium.copy(color = if (syncStatus.contains("failed", true)) AlertRed else AccentGreen))
-                        iOSButton(
-                            onClick = { 
-                                val request = OneTimeWorkRequestBuilder<SyncWorker>().build()
-                                WorkManager.getInstance(context).enqueue(request)
-                                notify("Cloud sync started in the background")
-                            },
-                            variant = iOSButtonVariant.Accent, accentColor = AccentGreen,
-                            modifier = Modifier.fillMaxWidth()
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Icon(Icons.Default.CloudUpload, contentDescription = "Sync to Cloud")
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Sync Now", fontWeight = FontWeight.Bold)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("Sync to the cloud", style = Typography.bodyLarge)
+                                Text(
+                                    "Off keeps everything on this phone — nothing is uploaded and " +
+                                        "what is already there stops being updated",
+                                    style = Typography.labelMedium.copy(color = TextSecondary)
+                                )
+                            }
+                            Switch(
+                                checked = isCloudSyncEnabled,
+                                onCheckedChange = { FinancePreferences.setCloudSyncEnabled(it) },
+                                colors = SwitchDefaults.colors(checkedTrackColor = AccentGreen)
+                            )
+                        }
+                        if (isCloudSyncEnabled) {
+                            Text(syncStatus, style = Typography.labelMedium.copy(color = if (syncStatus.contains("failed", true)) AlertRed else AccentGreen))
+                            iOSButton(
+                                onClick = {
+                                    val request = OneTimeWorkRequestBuilder<SyncWorker>().build()
+                                    WorkManager.getInstance(context).enqueue(request)
+                                    notify("Cloud sync started in the background")
+                                },
+                                variant = iOSButtonVariant.Accent, accentColor = AccentGreen,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Icon(Icons.Default.CloudUpload, contentDescription = "Sync to Cloud")
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text("Sync Now", fontWeight = FontWeight.Bold)
+                            }
                         }
 
                         // Removed Google Sign in
@@ -569,14 +594,17 @@ fun SettingsScreen(
                             style = Typography.bodyMedium.copy(color = TextSecondary)
                         )
                         iOSButton(
-                            onClick = { 
+                            onClick = {
                                 val monthFormat = java.text.SimpleDateFormat("MMMM yyyy", java.util.Locale.getDefault())
                                 val currentMonth = monthFormat.format(java.util.Date())
-                                val path = viewModel.exportMonthlyPdf(context, currentMonth)
-                                if (path != null) {
-                                    notify("PDF saved to $path")
-                                } else {
-                                    notify("Couldn't generate the PDF")
+                                // Rendering a PDF reads the whole ledger and writes a file.
+                                snackbarScope.launch {
+                                    when (val result = viewModel.exportMonthlyPdf(context, currentMonth)) {
+                                        is PdfExportResult.Saved -> notify("PDF saved to ${result.path}")
+                                        PdfExportResult.BlockedByPrivacyMode ->
+                                            notify("Turn off privacy mode to export a report with real amounts")
+                                        PdfExportResult.Failed -> notify("Couldn't generate the PDF")
+                                    }
                                 }
                             },
                             variant = iOSButtonVariant.Accent, accentColor = TextPrimary,

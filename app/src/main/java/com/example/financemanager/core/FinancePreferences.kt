@@ -39,6 +39,7 @@ object FinancePreferences {
     private const val KEY_PRIVACY_MODE = "privacy_mode"
     private const val KEY_DISMISSED_SMS_LINKS = "dismissed_sms_links"
     private const val KEY_DASHBOARD_SECTIONS = "dashboard_sections"
+    private const val KEY_CLOUD_SYNC_ENABLED = "cloud_sync_enabled"
 
     const val FREE_SCAN_LIMIT = 10
 
@@ -81,6 +82,14 @@ object FinancePreferences {
     private val _privacyMode = mutableStateOf(false)
     val privacyMode: Boolean get() = _privacyMode.value
 
+    /**
+     * Whether the app may copy anything to Supabase. On by default so existing installs keep the
+     * behaviour they had, but it is the user's data leaving their device, so it has to be theirs
+     * to stop — there was no way to turn sync off at all.
+     */
+    private val _cloudSyncEnabledFlow = MutableStateFlow(true)
+    val cloudSyncEnabledFlow = _cloudSyncEnabledFlow.asStateFlow()
+
     fun init(context: Context) {
         appContext = context.applicationContext
         val prefs = prefs()
@@ -96,12 +105,26 @@ object FinancePreferences {
             ?: PayCycleFrequency.MONTHLY
         _payCycleAnchorDayFlow.value = prefs.getInt(KEY_PAY_CYCLE_ANCHOR_DAY, 1).coerceAtLeast(1)
         _privacyMode.value = prefs.getBoolean(KEY_PRIVACY_MODE, false)
+        _cloudSyncEnabledFlow.value = prefs.getBoolean(KEY_CLOUD_SYNC_ENABLED, true)
     }
 
     fun setPrivacyMode(enabled: Boolean) {
         prefs().edit().putBoolean(KEY_PRIVACY_MODE, enabled).apply()
         _privacyMode.value = enabled
     }
+
+    fun setCloudSyncEnabled(enabled: Boolean) {
+        prefs().edit().putBoolean(KEY_CLOUD_SYNC_ENABLED, enabled).apply()
+        _cloudSyncEnabledFlow.value = enabled
+    }
+
+    /**
+     * The same flag, read straight from storage against a caller-supplied context. [SyncWorker]
+     * can run in a process where [init] was never called, so it can't go through the flow.
+     */
+    fun cloudSyncEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_CLOUD_SYNC_ENABLED, true)
 
     fun dashboardSections(): Set<String> = prefs().getStringSet(
         KEY_DASHBOARD_SECTIONS,

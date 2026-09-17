@@ -1,6 +1,7 @@
 package com.example.financemanager.ui.components
 
 import com.example.financemanager.core.FinancePreferences
+import java.util.Locale
 
 /**
  * Formats a money amount, masking it when privacy mode is on so balances
@@ -15,9 +16,12 @@ fun moneyString(amount: Double, privacy: Boolean = FinancePreferences.privacyMod
     val symbol = FinancePreferences.currentCurrencySymbol()
     val prefix = if (symbol.length > 1) "$symbol " else symbol
     if (privacy) return "${prefix.trimEnd()}\u2022\u2022\u2022\u2022\u2022\u2022"
+    // Locale.US rather than the default: the grouping and decimal marks here are chosen to go
+    // with the currency symbol above, and a default-locale format would render the digits
+    // themselves in whatever numbering system the device is set to.
     return if (decimals <= 0) {
-        "$prefix${String.format("%,.0f", amount)}"
+        "$prefix${String.format(Locale.US, "%,.0f", amount)}"
     } else {
-        "$prefix${String.format("%,.${decimals}f", amount)}"
+        "$prefix${String.format(Locale.US, "%,.${decimals}f", amount)}"
     }
 }

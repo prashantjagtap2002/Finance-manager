@@ -12,6 +12,7 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -46,9 +47,9 @@ fun TransactionLogsScreen(
     onNavigateBack: () -> Unit,
     initialAccountId: Long? = null
 ) {
-    val transactions by viewModel.transactions.collectAsState()
-    val categories by viewModel.categories.collectAsState()
-    val accounts by viewModel.accounts.collectAsState()
+    val transactions by viewModel.transactions.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
     var searchQuery by remember { mutableStateOf("") }
@@ -142,11 +143,12 @@ fun TransactionLogsScreen(
                 actions = {
                     IconButton(
                         onClick = {
-                            val path = viewModel.exportTransactionsToCsv(context)
-                            if (path != null) {
-                                scope.launch { snackbarHostState.showSnackbar("Exported to $path", withDismissAction = true) }
-                            } else {
-                                scope.launch { snackbarHostState.showSnackbar("Nothing to export", withDismissAction = true) }
+                            // Reads the ledger and writes a file, so it belongs in a coroutine
+                            // rather than on the click that started it.
+                            scope.launch {
+                                val path = viewModel.exportTransactionsToCsv(context)
+                                val message = if (path != null) "Exported to $path" else "Nothing to export"
+                                snackbarHostState.showSnackbar(message, withDismissAction = true)
                             }
                         }
                     ) {
@@ -274,6 +276,12 @@ fun TransactionLogsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // Indexed once per data change instead of scanned once per visible row: every row
+            // that scrolls into view was doing a linear search through both lists to find its
+            // account and category name.
+            val accountsById = remember(accounts) { accounts.associateBy { it.id } }
+            val categoriesById = remember(categories) { categories.associateBy { it.id } }
+
             // Logs List
             LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -299,8 +307,8 @@ fun TransactionLogsScreen(
                 }
 
                 items(visibleTransactions, key = { it.id }) { transaction ->
-                    val accountName = accounts.firstOrNull { it.id == transaction.sourceAccountId }?.name ?: "Account"
-                    val category = categories.firstOrNull { it.id == transaction.categoryId }
+                    val accountName = accountsById[transaction.sourceAccountId]?.name ?: "Account"
+                    val category = categoriesById[transaction.categoryId]
                     val categoryName = category?.name ?: "Income/Transfer"
 
                     val dismissState = rememberSwipeToDismissBoxState(confirmValueChange = { value ->

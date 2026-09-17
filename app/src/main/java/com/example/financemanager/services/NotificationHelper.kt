@@ -18,6 +18,12 @@ import com.example.financemanager.ui.components.moneyString
 /**
  * Central place for all local notifications: envelope budget alerts,
  * upcoming bill reminders and goal milestones.
+ *
+ * Amounts here go through [moneyString] with its default, so privacy mode masks them. These are
+ * the one surface that shows numbers when the app isn't even open — on the lock screen, to anyone
+ * holding the phone — which is exactly the shoulder-surfing privacy mode exists to stop. They used
+ * to opt out of it. The envelope or bill name still comes through, so a masked alert is still
+ * worth receiving.
  */
 object NotificationHelper {
 
@@ -89,13 +95,13 @@ object NotificationHelper {
             notify(
                 context, CHANNEL_BUDGET, id,
                 "Budget exceeded: $categoryName",
-                "You've spent ${moneyString(spent, false)} of your ${moneyString(limit, false)} envelope. Time to slow down!"
+                "You've spent ${moneyString(spent)} of your ${moneyString(limit)} envelope. Time to slow down!"
             )
         } else {
             notify(
                 context, CHANNEL_BUDGET, id,
                 "80% of $categoryName budget used",
-                "${moneyString(limit - spent, false)} left in this envelope for the month."
+                "${moneyString(limit - spent)} left in this envelope for the month."
             )
         }
     }
@@ -103,9 +109,9 @@ object NotificationHelper {
     /** Summary reminder for bills due within the next 48 hours. */
     fun notifyUpcomingBills(context: Context, billCount: Int, totalAmount: Double, firstBillNote: String) {
         val text = if (billCount == 1) {
-            "\"$firstBillNote\" (${moneyString(totalAmount, false)}) is due within 2 days."
+            "\"$firstBillNote\" (${moneyString(totalAmount)}) is due within 2 days."
         } else {
-            "$billCount bills totalling ${moneyString(totalAmount, false)} are due within 2 days, including \"$firstBillNote\"."
+            "$billCount bills totalling ${moneyString(totalAmount)} are due within 2 days, including \"$firstBillNote\"."
         }
         notify(context, CHANNEL_BILLS, 2000, "Upcoming bills", text)
     }

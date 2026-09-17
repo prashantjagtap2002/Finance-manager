@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.spring
@@ -32,6 +33,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -65,6 +67,8 @@ import com.example.financemanager.theme.*
 import com.example.financemanager.theme.Typography
 import com.example.financemanager.ui.components.iOSCard
 import com.example.financemanager.ui.components.iOSCardStyle
+import com.example.financemanager.ui.components.VerticalBar
+import com.example.financemanager.ui.components.rememberBarFraction
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import kotlinx.coroutines.launch
@@ -191,11 +195,11 @@ fun InsightsScreen(
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
 
-    val transactions by viewModel.transactions.collectAsState()
-    val categories by viewModel.categories.collectAsState()
-    val accounts by viewModel.accounts.collectAsState()
-    val streakDays by viewModel.streakDays.collectAsState()
-    val goals by viewModel.savingsGoals.collectAsState()
+    val transactions by viewModel.transactions.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val streakDays by viewModel.streakDays.collectAsStateWithLifecycle()
+    val goals by viewModel.savingsGoals.collectAsStateWithLifecycle()
 
     var currentFilterType by remember { mutableStateOf(DynamicDateFilter.THIS_CYCLE) }
     var periodOffset by remember { mutableIntStateOf(0) }
@@ -382,11 +386,15 @@ fun InsightsScreen(
                     }
                     // Export CSV
                     IconButton(onClick = {
-                        val path = viewModel.exportTransactionsToCsv(context)
-                        if (path != null) {
-                            notify("Exported to $path")
-                        } else {
-                            notify("Nothing to export for this period")
+                        // Reads the ledger and writes a file, so it belongs in a coroutine
+                        // rather than on the click that started it.
+                        snackbarScope.launch {
+                            val path = viewModel.exportTransactionsToCsv(context)
+                            if (path != null) {
+                                notify("Exported to $path")
+                            } else {
+                                notify("Nothing to export for this period")
+                            }
                         }
                     }) {
                         Icon(Icons.Default.FileDownload, contentDescription = "Export Report", tint = SecondaryTeal)
@@ -954,18 +962,16 @@ fun DonutChart(
     totalExpense: Double,
     modifier: Modifier = Modifier
 ) {
-    var isVisible by remember { mutableStateOf(false) }
+    // Sweeps in from nothing whenever the breakdown changes. Held as an Animatable and read down
+    // inside the draw lambda: reading it here in composition recomposed this Box, its Canvas and
+    // the total in the middle of it on every one of the 800ms of frames. The old version also had
+    // to bounce a flag through a 50ms delay to make the animation restart, which an Animatable
+    // does directly.
+    val sweepProgress = remember { Animatable(0f) }
     LaunchedEffect(categoryBreakdown) {
-        isVisible = false
-        delay(50.milliseconds)
-        isVisible = true
+        sweepProgress.snapTo(0f)
+        sweepProgress.animateTo(1f, tween(durationMillis = 800, easing = EaseOutCubic))
     }
-
-    val sweepProgress by animateFloatAsState(
-        targetValue = if (isVisible) 1f else 0f,
-        animationSpec = tween(durationMillis = 800, easing = EaseOutCubic),
-        label = "sweep_progress"
-    )
 
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -975,7 +981,7 @@ fun DonutChart(
                 drawArc(
                     color = share.color,
                     startAngle = startAngle,
-                    sweepAngle = sweepAngle * sweepProgress,
+                    sweepAngle = sweepAngle * sweepProgress.value,
                     useCenter = false,
                     topLeft = Offset.Zero,
                     size = Size(size.width, size.height),
@@ -1106,19 +1112,10 @@ fun DailyExpenseBarChart(
     val averageAmount = totalAmount / dayBuckets.size.coerceAtLeast(1)
     val peakDay = dayBuckets.maxByOrNull { it.amount }
 
-    var isVisible by remember { mutableStateOf(false) }
-    LaunchedEffect(dayBuckets) {
-        isVisible = false
-        delay(50.milliseconds)
-        isVisible = true
-    }
-
-    val heightProgress by animateFloatAsState(
-        targetValue = if (isVisible) 1f else 0f,
-        animationSpec = tween(durationMillis = 600, easing = EaseOutCubic),
-        label = "bar_height"
-    )
-
+    // No shared intro animation here any more. Each bar springs in from zero on its own (see
+    // rememberBarFraction), which is the same entrance without a second animation multiplied into
+    // every bar's target — that one re-aimed all 31 springs on every frame of the intro, and
+    // recomposed this whole Column around them to do it.
     val selectedBucket = dayBuckets.firstOrNull { it.timestamp == selectedDayTimestamp }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -1176,15 +1173,8 @@ fun DailyExpenseBarChart(
         ) {
             dayBuckets.forEachIndexed { index, bucket ->
                 val isSelected = bucket.timestamp == selectedDayTimestamp
-                val targetFraction = ((bucket.amount / maxScaled) * heightProgress).toFloat().coerceIn(0.04f, 1.0f)
-                val animatedFraction by animateFloatAsState(
-                    targetValue = targetFraction,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessLow
-                    ),
-                    label = "bar_frac"
-                )
+                val targetFraction = (bucket.amount / maxScaled).toFloat().coerceIn(0.04f, 1.0f)
+                val animatedFraction = rememberBarFraction(targetFraction)
 
                 val barColor = when {
                     isSelected -> AccentGreen
@@ -1225,12 +1215,12 @@ fun DailyExpenseBarChart(
                             .weight(1f),
                         contentAlignment = Alignment.BottomCenter
                     ) {
-                        Box(
+                        VerticalBar(
+                            fraction = { animatedFraction.value },
+                            color = barColor,
                             modifier = Modifier
                                 .fillMaxWidth(if (isScrollable) 0.7f else 0.5f)
-                                .fillMaxHeight(fraction = animatedFraction)
-                                .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
-                                .background(barColor)
+                                .fillMaxHeight()
                         )
                     }
 
@@ -1392,11 +1382,13 @@ fun DailyAmountLineChart(
         delay(50.milliseconds)
         isVisible = true
     }
-    val sweep by animateFloatAsState(
-        targetValue = if (isVisible) 1f else 0f,
-        animationSpec = tween(durationMillis = 900, easing = EaseOutCubic),
-        label = "line_sweep"
-    )
+    // Read inside the Canvas rather than here, so revealing the line repaints it instead of
+    // recomposing the whole chart — header, legend, tooltip and all — on every frame.
+    val sweep = remember { Animatable(0f) }
+    LaunchedEffect(isVisible) {
+        if (isVisible) sweep.animateTo(1f, tween(durationMillis = 900, easing = EaseOutCubic))
+        else sweep.snapTo(0f)
+    }
 
     val upColor = AccentGreen
     val downColor = AlertRed
@@ -1567,7 +1559,7 @@ fun DailyAmountLineChart(
                 }
 
                 // Straight segments, revealed left-to-right
-                val progressed = (sweep * (points.size - 1)).coerceIn(0f, (points.size - 1).toFloat())
+                val progressed = (sweep.value * (points.size - 1)).coerceIn(0f, (points.size - 1).toFloat())
                 val fullSegments = kotlin.math.floor(progressed).toInt()
                 val fraction = progressed - fullSegments
 
@@ -1857,16 +1849,8 @@ fun IncomeVsExpenseComparisonChart(
     val incomeRatio = (income / maxVal).toFloat().coerceIn(0.05f, 1f)
     val expenseRatio = (expense / maxVal).toFloat().coerceIn(0.05f, 1f)
 
-    val animatedIncomeRatio by animateFloatAsState(
-        targetValue = incomeRatio,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
-        label = "inc_ratio"
-    )
-    val animatedExpenseRatio by animateFloatAsState(
-        targetValue = expenseRatio,
-        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessLow),
-        label = "exp_ratio"
-    )
+    val animatedIncomeRatio = rememberBarFraction(incomeRatio)
+    val animatedExpenseRatio = rememberBarFraction(expenseRatio)
 
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -1903,12 +1887,13 @@ fun IncomeVsExpenseComparisonChart(
                         .weight(1f),
                     contentAlignment = Alignment.BottomCenter
                 ) {
-                    Box(
+                    VerticalBar(
+                        fraction = { animatedIncomeRatio.value },
+                        color = AccentGreen,
+                        cornerRadius = 6.dp,
                         modifier = Modifier
                             .width(36.dp)
-                            .fillMaxHeight(animatedIncomeRatio)
-                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
-                            .background(AccentGreen)
+                            .fillMaxHeight()
                     )
                 }
                 Spacer(modifier = Modifier.height(6.dp))
@@ -1927,12 +1912,13 @@ fun IncomeVsExpenseComparisonChart(
                         .weight(1f),
                     contentAlignment = Alignment.BottomCenter
                 ) {
-                    Box(
+                    VerticalBar(
+                        fraction = { animatedExpenseRatio.value },
+                        color = AlertRed,
+                        cornerRadius = 6.dp,
                         modifier = Modifier
                             .width(36.dp)
-                            .fillMaxHeight(animatedExpenseRatio)
-                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
-                            .background(AlertRed)
+                            .fillMaxHeight()
                     )
                 }
                 Spacer(modifier = Modifier.height(6.dp))

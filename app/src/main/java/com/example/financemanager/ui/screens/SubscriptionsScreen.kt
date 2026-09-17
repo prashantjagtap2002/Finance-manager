@@ -11,6 +11,7 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,9 +51,9 @@ fun SubscriptionsScreen(
     viewModel: FinanceViewModel,
     onNavigateBack: () -> Unit
 ) {
-    val recurring by viewModel.recurringTransactions.collectAsState()
-    val categories by viewModel.categories.collectAsState()
-    val isPrivacy by viewModel.isPrivacyMode.collectAsState()
+    val recurring by viewModel.recurringTransactions.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val isPrivacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
 
     var deletingRec by remember { mutableStateOf<RecurringTransaction?>(null) }
     var splittingRec by remember { mutableStateOf<RecurringTransaction?>(null) }

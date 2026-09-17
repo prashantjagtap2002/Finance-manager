@@ -2,6 +2,7 @@ package com.example.financemanager.ui.screens
 
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.automirrored.filled.*
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,9 +75,9 @@ fun GoalsScreen(
     onNavigateBack: () -> Unit,
     showBackButton: Boolean = true
 ) {
-    val goals by viewModel.savingsGoals.collectAsState()
-    val accounts by viewModel.accounts.collectAsState()
-    val isPrivacy by viewModel.isPrivacyMode.collectAsState()
+    val goals by viewModel.savingsGoals.collectAsStateWithLifecycle()
+    val accounts by viewModel.accounts.collectAsStateWithLifecycle()
+    val isPrivacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
 
     var showAddDialog by remember { mutableStateOf(false) }
     var contributingGoal by remember { mutableStateOf<SavingsGoal?>(null) }
@@ -273,14 +275,17 @@ fun GoalProgressRing(
     modifier: Modifier = Modifier,
     strokeWidth: Float = 10f
 ) {
-    val animatedProgress by animateFloatAsState(
+    // Both of these are read down inside the Canvas, never here. Unwrapping them in composition
+    // subscribed this composable to them, and since the glow never stops, a completed goal sat
+    // there recomposing itself at the display's refresh rate for as long as it was on screen.
+    val animatedProgress = animateFloatAsState(
         targetValue = progress.coerceIn(0f, 1f),
         animationSpec = tween(700),
         label = "goalProgress"
     )
     val isComplete = progress >= 1f
     val infiniteTransition = rememberInfiniteTransition(label = "glowTransition")
-    val glowAlpha by infiniteTransition.animateFloat(
+    val glowAlpha = infiniteTransition.animateFloat(
         initialValue = 0.3f,
         targetValue = 0.7f,
         animationSpec = infiniteRepeatable(
@@ -297,7 +302,7 @@ fun GoalProgressRing(
         
         if (isComplete) {
             drawCircle(
-                color = color.copy(alpha = glowAlpha),
+                color = color.copy(alpha = glowAlpha.value),
                 radius = size.width / 2,
                 center = Offset(size.width / 2, size.height / 2)
             )
@@ -317,7 +322,7 @@ fun GoalProgressRing(
         drawArc(
             color = color,
             startAngle = -90f,
-            sweepAngle = animatedProgress * 360f,
+            sweepAngle = animatedProgress.value * 360f,
             useCenter = false,
             topLeft = Offset(inset, inset),
             size = arcSize,
@@ -442,25 +447,26 @@ private fun GoalConfettiOverlay(
             Triple((index * 37 % 100) / 100f, (index * 17 % 100) / 100f, colors[index % colors.size])
         }
     }
-    val progress by animateFloatAsState(
-        targetValue = 1f,
-        animationSpec = tween(2200),
-        label = "confettiProgress"
-    )
+    // animateFloatAsState starts *at* its target, so a constant target of 1f never animated: the
+    // confetti was drawn once, already faded out, and nothing ever fell. An Animatable starting at
+    // zero is the difference between a celebration and a static smudge. Read in the Canvas below,
+    // so 48 particles falling is a repaint rather than a recomposition per frame.
+    val progress = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {
-        delay(2300)
+        progress.animateTo(1f, tween(2200))
         onFinished()
     }
 
     Canvas(modifier = modifier) {
         particles.forEachIndexed { index, (xSeed, ySeed, color) ->
             val x = size.width * xSeed
-            val drop = ((progress + index * 0.03f) % 1f) * size.height
+            val fallen = progress.value
+            val drop = ((fallen + index * 0.03f) % 1f) * size.height
             val width = 8.dp.toPx()
             val height = 14.dp.toPx()
             drawRect(
-                color = color.copy(alpha = 1f - progress.coerceAtMost(0.85f)),
+                color = color.copy(alpha = 1f - fallen.coerceAtMost(0.85f)),
                 topLeft = Offset(x, drop + size.height * ySeed * 0.1f),
                 size = Size(width, height)
             )

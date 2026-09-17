@@ -70,7 +70,18 @@ data class Account(
      * [com.example.financemanager.domain.AccountLedger] maintains and can re-derive to repair
      * drift left by older versions.
      */
-    val openingBalance: Double = 0.0
+    val openingBalance: Double = 0.0,
+    /**
+     * When this row last changed, in epoch millis. The cloud merge compares it against the
+     * server's copy to decide which side is newer — without it a sync could only ever add rows it
+     * had never seen, so an edit made on one device never reached another.
+     *
+     * Stamped by [com.example.financemanager.domain.FinanceRepository] and
+     * [com.example.financemanager.domain.AccountLedger], never by the DAO: a row arriving from the
+     * cloud has to keep the timestamp it was written with, or it would look locally edited the
+     * moment it landed and be pushed straight back.
+     */
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "categories")
@@ -83,7 +94,9 @@ data class Category(
     val isZeroBased: Boolean = false,
     val rolloverAmount: Double = 0.0,
     val isRolloverEnabled: Boolean = false,
-    val displayOrder: Int = 0
+    val displayOrder: Int = 0,
+    /** When this row last changed; see [Account.updatedAt]. */
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(
@@ -114,7 +127,9 @@ data class Transaction(
     val merchantName: String? = null,
     val originalAmount: Double? = null,
     val originalCurrency: String? = null,
-    val isVerified: Boolean = true
+    val isVerified: Boolean = true,
+    /** When this row last changed; see [Account.updatedAt]. */
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "savings_goals")
@@ -126,7 +141,9 @@ data class SavingsGoal(
     val targetAmount: Double,
     val savedAmount: Double = 0.0,
     val targetDate: Long? = null, // Optional deadline (epoch millis)
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    /** When this row last changed; see [Account.updatedAt]. */
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "recurring_transactions")
@@ -141,7 +158,9 @@ data class RecurringTransaction(
     val startDate: Long,
     val nextExecutionDate: Long,
     val isAutoLog: Boolean = true,
-    val isPaused: Boolean = false
+    val isPaused: Boolean = false,
+    /** When this row last changed; see [Account.updatedAt]. */
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "debts", indices = [Index(value = ["date"])])
@@ -156,7 +175,9 @@ data class Debt(
     val paidAmount: Double = 0.0,
     val notes: String = "",
     val interestRate: Double? = null,
-    val minimumPayment: Double? = null
+    val minimumPayment: Double? = null,
+    /** When this row last changed; see [Account.updatedAt]. */
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(
@@ -193,7 +214,9 @@ data class SmsTransaction(
     /** The other leg of a self transfer or refund, once the pair has been resolved together. */
     val linkedSmsId: Long = 0,
     /** How the pair was resolved: `""`, `"TRANSFER"` or `"REVERSAL"`. */
-    val resolution: String = ""
+    val resolution: String = "",
+    /** When this row last changed; see [Account.updatedAt]. */
+    val updatedAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "investments")

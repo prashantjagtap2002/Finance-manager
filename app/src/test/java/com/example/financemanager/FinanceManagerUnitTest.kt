@@ -2,7 +2,6 @@ package com.example.financemanager
 
 import com.example.financemanager.data.TransactionType
 import com.example.financemanager.domain.NlpParser
-import com.example.financemanager.services.SmsNotificationListenerService
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -87,7 +86,7 @@ class FinanceManagerUnitTest {
 
     @Test
     fun testSmsAlertParsing() {
-        // RegEx patterns from SmsNotificationListenerService
+        // Copies of the templates in NotificationTransactionParser, which has its own tests.
         val paymentPatterns = listOf(
             Regex("""(?i)(?:spent|debited|paid|sent)\s*(?:rs\.?|₹)\s*(\d+(?:\.\d{1,2})?)\s*(?:at|to|on)\s*(.+?)(?:\b|using|\s|$)"""),
             Regex("""(?i)(?:rs\.?|₹)\s*(\d+(?:\.\d{1,2})?)\s*(?:spent|debited|paid|sent)\s*(?:at|to|on)\s*(.+?)(?:\b|using|\s|$)"""),

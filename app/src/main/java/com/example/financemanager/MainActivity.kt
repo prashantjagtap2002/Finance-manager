@@ -15,6 +15,7 @@ import androidx.biometric.BiometricManager
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
@@ -103,7 +104,7 @@ class MainActivity : FragmentActivity() {
         val openQuickEntry = intent.getBooleanExtra("open_quick_entry", false)
 
         setContent {
-            val themeMode by FinancePreferences.themeModeFlow.collectAsState()
+            val themeMode by FinancePreferences.themeModeFlow.collectAsStateWithLifecycle()
             val financeViewModel: com.example.financemanager.ui.viewmodel.FinanceViewModel = viewModel()
 
             FinanceManagerTheme(themeMode = themeMode) {

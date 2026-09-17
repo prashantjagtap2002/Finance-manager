@@ -1,15 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+   Backup and transfer rules for API 31+. backup_rules.xml covers older releases and is kept in
+   step with this file by hand.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- Holds the Supabase access/refresh tokens in plaintext; excluded so a restored
-             cloud backup can't be used to resume another device's cloud session. -->
+        <!-- The Supabase Auth plugin persists the live session (access + refresh token) into
+             the app's default SharedPreferences file, named after the applicationId. Restoring
+             it onto another device would hand that device a working cloud session, so it stays
+             out of the backup and the app simply signs in again. -->
+        <exclude domain="sharedpref" path="com.stack.finance_preferences.xml"/>
+
+        <!-- Left over from the version that kept its own plaintext copy of those tokens. The
+             copy is gone; the exclusion stays so an old file can never be restored either. -->
         <exclude domain="sharedpref" path="supabase_session.xml"/>
+
+        <!-- The Room database is not encrypted and holds every balance, every transaction and
+             the raw text of every bank SMS the app has parsed. It stays on the device rather
+             than going to Google's servers for the convenience of a restore. The device-transfer
+             block below still carries it to a new phone, which is the path that matters. -->
+        <exclude domain="database" path="finance_database"/>
+        <exclude domain="database" path="finance_database-wal"/>
+        <exclude domain="database" path="finance_database-shm"/>
+        <!-- Records that this device has completed a pull, which is what lets a sync delete cloud
+             rows the device no longer has. It must never outlive the database it describes: restored
+             on its own, next to a database that did NOT come back, it would tell the first sync that
+             an empty device is authoritative and the user's cloud data would be deleted to match. -->
+        <exclude domain="sharedpref" path="sync_state.xml"/>
     </cloud-backup>
     <device-transfer>
+        <exclude domain="sharedpref" path="com.stack.finance_preferences.xml"/>
         <exclude domain="sharedpref" path="supabase_session.xml"/>
+        <!-- The database is deliberately NOT excluded here: a device transfer is a direct,
+             user-initiated copy between the user's own two phones, with nothing left at rest
+             on a server afterwards. -->
     </device-transfer>
 </data-extraction-rules>
