@@ -6,6 +6,8 @@ import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
+import io.github.jan.supabase.serializer.KotlinXSerializer
+import kotlinx.serialization.json.Json
 
 /**
  * Single entry point for the Supabase backend.
@@ -25,6 +27,24 @@ object SupabaseManager {
             supabaseUrl = BuildConfig.SUPABASE_URL,
             supabaseKey = BuildConfig.SUPABASE_KEY
         ) {
+            // A NULL column must not take a whole table's sync down with it.
+            //
+            // The Supabase tables are created by hand from the README, and a column added later
+            // leaves NULL in every row that predates it. A Kotlin default on the DTO property does
+            // NOT cover that: a default fills in a *missing* key, while an explicit `null` for a
+            // non-nullable property is a decoding error. One such row threw, `syncTable` logged it
+            // and moved on, and the entire table stopped syncing — silently, forever. That is what
+            // kept 349 captured bank alerts in the cloud and out of the app.
+            //
+            // `coerceInputValues` makes an explicit null fall back to the property's declared
+            // default, which is the reading every one of these columns already wanted.
+            defaultSerializer = KotlinXSerializer(
+                Json {
+                    ignoreUnknownKeys = true
+                    coerceInputValues = true
+                    explicitNulls = false
+                }
+            )
             install(Auth)
             install(Postgrest)
         }

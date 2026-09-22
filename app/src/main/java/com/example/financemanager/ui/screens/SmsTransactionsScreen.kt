@@ -213,7 +213,12 @@ fun SmsTransactionsScreen(
         if (allTxs.isEmpty()) {
             EmptySmsState(
                 modifier = Modifier.padding(paddingValues),
-                onImport = { importLauncher.launch(arrayOf("application/json", "text/xml", "application/xml")) }
+                onImport = { importLauncher.launch(arrayOf("application/json", "text/xml", "application/xml")) },
+                onGrantPermission = if (!smsPermissionGranted) {
+                    { smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS) }
+                } else {
+                    null
+                }
             )
         } else {
             LazyColumn(
@@ -449,7 +454,8 @@ fun SmsTransactionsScreen(
 @Composable
 private fun EmptySmsState(
     modifier: Modifier = Modifier,
-    onImport: () -> Unit
+    onImport: () -> Unit,
+    onGrantPermission: (() -> Unit)? = null
 ) {
     Box(
         modifier = modifier.fillMaxSize(),
@@ -474,11 +480,28 @@ private fun EmptySmsState(
             Text("No SMS transactions yet", style = Typography.titleMedium.copy(color = TextPrimary))
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                "Bank transaction SMS will appear here automatically,\nor import them from a JSON file.",
+                if (onGrantPermission != null) {
+                    "Allow SMS access so bank transaction alerts can appear here automatically,\n" +
+                        "or import them from a JSON file."
+                } else {
+                    "Bank transaction SMS will appear here automatically,\nor import them from a JSON file."
+                },
                 style = Typography.bodyMedium.copy(color = TextSecondary, lineHeight = 20.sp),
                 modifier = Modifier.padding(horizontal = 32.dp)
             )
             Spacer(modifier = Modifier.height(20.dp))
+            onGrantPermission?.let { grant ->
+                IosButton(
+                    onClick = grant,
+                    variant = IosButtonVariant.Accent,
+                    accentColor = SecondaryTeal
+                ) {
+                    Icon(Icons.Default.Security, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Allow SMS Access", fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(modifier = Modifier.height(10.dp))
+            }
             IosButton(
                 onClick = onImport,
                 variant = IosButtonVariant.Accent, accentColor = SecondaryTeal
