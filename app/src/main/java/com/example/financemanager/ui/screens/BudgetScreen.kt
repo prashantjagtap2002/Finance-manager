@@ -29,10 +29,10 @@ import com.example.financemanager.data.Category
 import com.example.financemanager.data.TransactionType
 import com.example.financemanager.theme.*
 import com.example.financemanager.theme.Typography
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSCardStyle
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosCardStyle
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import kotlinx.coroutines.launch
@@ -196,16 +196,16 @@ fun BudgetScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    iOSButton(
+                    IosButton(
                         onClick = { showTransferDialog = true },
                         modifier = Modifier.weight(1f),
-                        variant = iOSButtonVariant.Outlined
+                        variant = IosButtonVariant.Outlined
                     ) {
                         Icon(Icons.Default.SwapHoriz, contentDescription = null)
                         Spacer(modifier = Modifier.width(6.dp))
                         Text("Move money")
                     }
-                    iOSButton(
+                    IosButton(
                         onClick = {
                             viewModel.stuffEnvelopesForNewCycle()
                             scope.launch {
@@ -213,7 +213,7 @@ fun BudgetScreen(
                             }
                         },
                         modifier = Modifier.weight(1f),
-                        variant = iOSButtonVariant.Accent,
+                        variant = IosButtonVariant.Accent,
                         accentColor = AccentGreen
                     ) {
                         Icon(Icons.Default.AutoAwesome, contentDescription = null)
@@ -241,8 +241,8 @@ fun BudgetScreen(
                         (envelopeSpent / envelopeLimit).toFloat().coerceIn(0f, 1f)
                     } else 0f
                     
-                    iOSCard(
-                        style = iOSCardStyle.Grouped,
+                    IosCard(
+                        style = IosCardStyle.Grouped,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable {
@@ -448,7 +448,7 @@ fun BudgetScreen(
                 }
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         val amount = amountText.toDoubleOrNull() ?: 0.0
                         if (sourceId != null && destinationId != null) {
@@ -568,7 +568,7 @@ fun BudgetScreen(
                 }
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         val amount = editLimitInput.toDoubleOrNull() ?: 0.0
                         val updated = category.copy(
@@ -581,7 +581,7 @@ fun BudgetScreen(
                         viewModel.updateCategory(updated)
                         categoryToEditLimit = null
                     },
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = MaterialTheme.colorScheme.secondary
                 ) {
                     Text("Save")
@@ -615,13 +615,13 @@ fun BudgetScreen(
                 }
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         val valInput = rolloverInput.toDoubleOrNull() ?: 0.0
                         viewModel.updateCategory(category.copy(rolloverAmount = valInput))
                         categoryToUpdateRollover = null
                     },
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = AccentGreen
                 ) {
                     Text("Update")
@@ -735,7 +735,7 @@ fun BudgetScreen(
                 }
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         if (categoryName.isNotEmpty()) {
                             val limit = categoryLimit.toDoubleOrNull() ?: 0.0
@@ -749,7 +749,7 @@ fun BudgetScreen(
                             showAddCategoryDialog = false
                         }
                     },
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = MaterialTheme.colorScheme.primary
                 ) {
                     Text("Create")

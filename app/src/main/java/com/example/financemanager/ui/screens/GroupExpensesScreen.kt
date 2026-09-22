@@ -35,10 +35,10 @@ import com.example.financemanager.data.ExpenseGroupExpense
 import com.example.financemanager.data.ExpenseGroupMember
 import com.example.financemanager.domain.SettlementTransfer
 import com.example.financemanager.theme.*
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSCardStyle
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosCardStyle
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import com.google.zxing.BarcodeFormat
@@ -114,7 +114,7 @@ fun GroupExpensesContent(viewModel: FinanceViewModel, modifier: Modifier = Modif
                     Spacer(Modifier.height(12.dp))
                     Text("Create a group for a trip or shared home", color = TextPrimary)
                     Spacer(Modifier.height(16.dp))
-                    iOSButton(onClick = { showCreateGroup = true }, accentColor = SecondaryTeal) {
+                    IosButton(onClick = { showCreateGroup = true }, accentColor = SecondaryTeal) {
                         Icon(Icons.Default.Add, null)
                         Spacer(Modifier.width(6.dp))
                         Text("Create group")
@@ -128,7 +128,7 @@ fun GroupExpensesContent(viewModel: FinanceViewModel, modifier: Modifier = Modif
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 item {
-                    iOSCard(style = iOSCardStyle.Elevated, modifier = Modifier.fillMaxWidth()) {
+                    IosCard(style = IosCardStyle.Elevated, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
@@ -138,15 +138,15 @@ fun GroupExpensesContent(viewModel: FinanceViewModel, modifier: Modifier = Modif
                                 Text(moneyString(expenses.sumOf { it.amount }), style = Typography.titleMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold))
                             }
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                iOSButton(
+                                IosButton(
                                     onClick = { showAddMember = true },
-                                    variant = iOSButtonVariant.Tinted,
+                                    variant = IosButtonVariant.Tinted,
                                     accentColor = SecondaryTeal,
                                     modifier = Modifier.weight(1f)
                                 ) { Text("Add person") }
-                                iOSButton(
+                                IosButton(
                                     onClick = { showAddExpense = true },
-                                    variant = iOSButtonVariant.Accent,
+                                    variant = IosButtonVariant.Accent,
                                     accentColor = PrimaryViolet,
                                     enabled = members.size >= 2,
                                     modifier = Modifier.weight(1f)
@@ -161,7 +161,7 @@ fun GroupExpensesContent(viewModel: FinanceViewModel, modifier: Modifier = Modif
                 }
                 if (settlements.isEmpty()) {
                     item {
-                        iOSCard(modifier = Modifier.fillMaxWidth()) {
+                        IosCard(modifier = Modifier.fillMaxWidth()) {
                             Text(
                                 if (expenses.isEmpty()) "Add a receipt to calculate who owes whom."
                                 else "Everyone is settled up.",
@@ -174,7 +174,7 @@ fun GroupExpensesContent(viewModel: FinanceViewModel, modifier: Modifier = Modif
                         val from = members.firstOrNull { it.id == transfer.fromMemberId }
                         val to = members.firstOrNull { it.id == transfer.toMemberId }
                         if (from != null && to != null) {
-                            iOSCard(modifier = Modifier.fillMaxWidth()) {
+                            IosCard(modifier = Modifier.fillMaxWidth()) {
                                 Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f)) {
                                         Text("${from.name} pays ${to.name}", style = Typography.bodyLarge.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold))
@@ -199,7 +199,7 @@ fun GroupExpensesContent(viewModel: FinanceViewModel, modifier: Modifier = Modif
                 } else {
                     items(expenses, key = { it.id }) { expense ->
                         val payer = members.firstOrNull { it.id == expense.paidByMemberId }?.name ?: "Unknown"
-                        iOSCard(modifier = Modifier.fillMaxWidth()) {
+                        IosCard(modifier = Modifier.fillMaxWidth()) {
                             Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Icon(Icons.Default.ReceiptLong, null, tint = SecondaryTeal)
                                 Spacer(Modifier.width(12.dp))

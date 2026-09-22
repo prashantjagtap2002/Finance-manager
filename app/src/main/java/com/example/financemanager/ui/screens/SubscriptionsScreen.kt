@@ -24,9 +24,9 @@ import com.example.financemanager.data.RecurringInterval
 import com.example.financemanager.data.RecurringTransaction
 import com.example.financemanager.data.TransactionType
 import com.example.financemanager.theme.*
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import java.text.SimpleDateFormat
@@ -89,7 +89,7 @@ fun SubscriptionsScreen(
         ) {
             // Monthly commitment summary
             item {
-                iOSCard(modifier = Modifier.fillMaxWidth()) {
+                IosCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text("MONTHLY COMMITMENT", style = Typography.labelMedium.copy(color = TextSecondary))
                         Spacer(modifier = Modifier.height(4.dp))
@@ -179,12 +179,12 @@ fun SubscriptionsScreen(
                 )
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         viewModel.deleteRecurringTransaction(rec)
                         deletingRec = null
                     },
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = AlertRed
                 ) { Text("Stop schedule") }
             },
@@ -227,7 +227,7 @@ fun SubscriptionsScreen(
                 }
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         val share = friendShareText.toDoubleOrNull() ?: 0.0
                         if (friendName.isNotBlank() && share > 0) {
@@ -235,7 +235,7 @@ fun SubscriptionsScreen(
                             splittingRec = null
                         }
                     },
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = PrimaryViolet
                 ) { Text("Log & Split") }
             },
@@ -273,7 +273,7 @@ private fun SubscriptionItem(
         else -> "In $days days"
     }
 
-    iOSCard(
+    IosCard(
         modifier = Modifier.fillMaxWidth().let {
             if (rec.isPaused) it.background(Color.Black.copy(alpha = 0.4f)) else it
         }

@@ -37,6 +37,15 @@ class SyncWorker(
         /** How many ids one delete request may carry. See [deleteRows]. */
         private const val DELETE_CHUNK_SIZE = 200
 
+        /**
+         * How long a deletion record is kept before it is forgotten.
+         *
+         * Long enough that a device left offline for most of a year still gets its deletions
+         * across, and the cost of it being too short is only that a deleted row can reappear —
+         * never that a live one disappears. See [com.example.financemanager.data.DeletedRecord].
+         */
+        private const val TOMBSTONE_RETENTION_MS = 365L * 24 * 60 * 60 * 1000
+
         fun enqueueNow(context: Context) {
             val request = OneTimeWorkRequestBuilder<SyncWorker>()
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -154,7 +163,7 @@ class SyncWorker(
             }
 
             val db = FinanceDatabase.getDatabase(applicationContext)
-            val dao = db.financeDao()
+            val dao = db.dao()
             val client = SupabaseManager.client
 
             val errors = mutableListOf<Exception>()
@@ -175,13 +184,22 @@ class SyncWorker(
                 Log.w("SyncWorker", "Local database looks empty; skipping deletion sync this run")
             }
 
+            // Deletions no longer come from comparing the two sides. A row on the server that this
+            // device doesn't have is a row another device created just as often as it is one this
+            // device deleted, and absence cannot tell them apart — which is how a transaction
+            // entered on a second phone could be deleted out of the cloud before it ever arrived.
+            // A cloud row is removed only when this device wrote down that the user deleted it.
+            dao.pruneDeletedRecords(System.currentTimeMillis() - TOMBSTONE_RETENTION_MS)
+
             // One snapshot of the server per table, and everything else is decided from it: what
             // goes up, what comes down, what is gone. Two half-passes (push everything, then pull
             // whatever was missing) could never compare the two sides, which is why an edit made
             // anywhere could not travel and whether a deletion stuck depended entirely on which
             // half ran first. See planMerge for the two rules it follows.
             val remoteWins = isInitialSync
-            val deleteMissing = !isInitialSync && localLooksReal
+            // A device that has never pulled has nothing to say about deletions either: its
+            // tombstones describe a database the cloud has not been reconciled with yet.
+            val mayDelete = !isInitialSync && localLooksReal
 
             // Which account rows the server overwrote. Their balances are the server's to state;
             // every other account has to re-derive its own once the pulled transactions land.
@@ -199,10 +217,12 @@ class SyncWorker(
                 push: suspend (List<L>) -> Unit,
                 apply: suspend (R) -> Unit
             ): MergePlan<L, R> {
+                val locallyDeletedIds =
+                    if (mayDelete) dao.getDeletedRowIds(table).toSet() else emptySet()
                 val plan = planMerge(
                     local = local, localId = localId, localStamp = localStamp,
                     remote = remote, remoteId = remoteId, remoteStamp = remoteStamp,
-                    deleteMissing = deleteMissing, remoteWins = remoteWins
+                    locallyDeletedIds = locallyDeletedIds, remoteWins = remoteWins
                 )
                 plan.toApply.forEach { apply(it) }
                 push(plan.toPush)

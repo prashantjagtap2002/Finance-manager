@@ -23,9 +23,9 @@ import android.widget.Toast
 import androidx.compose.ui.platform.LocalContext
 import com.example.financemanager.data.*
 import com.example.financemanager.theme.*
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.components.EmptyState
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
@@ -426,7 +426,7 @@ fun LogItem(
     val dateFormatter = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
     val formattedDate = dateFormatter.format(Date(transaction.date))
 
-    iOSCard(
+    IosCard(
         modifier = modifier.fillMaxWidth()
     ) {
         Row(
@@ -628,12 +628,12 @@ fun EditTransactionDialog(
             }
         },
         confirmButton = {
-            iOSButton(
+            IosButton(
                 onClick = {
                     val amt = amountStr.toDoubleOrNull() ?: transaction.amount
                     onConfirm(amt, selectedAccount, selectedCategory, note, selectedDate.timeInMillis)
                 },
-                variant = iOSButtonVariant.Accent,
+                variant = IosButtonVariant.Accent,
                 accentColor = SecondaryTeal
             ) {
                 Text("Save")
@@ -748,9 +748,9 @@ fun SplitTransactionDialog(
             }
         },
         confirmButton = {
-            iOSButton(
+            IosButton(
                 onClick = { onConfirm(amount!!, selectedCategory!!) },
-                variant = iOSButtonVariant.Accent,
+                variant = IosButtonVariant.Accent,
                 accentColor = PrimaryViolet,
                 enabled = isValid
             ) {

@@ -1,14 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Permission for Notification Listener -->
-    <uses-permission android:name="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"/>
+    <!-- BIND_NOTIFICATION_LISTENER_SERVICE is deliberately NOT requested here. It is a
+         signature-level permission the system grants to itself, not something an app can hold;
+         declaring it made lint fail and granted nothing. The listener service below carries it as
+         android:permission instead, which is the half that actually matters: it is what stops
+         anything but the system binding to the service. -->
 
     <!-- Required for Supabase cloud sync -->
     <uses-permission android:name="android.permission.INTERNET"/>
 
     <!-- SMS permissions for bank transaction capture -->
     <uses-permission android:name="android.permission.RECEIVE_SMS"/>
+
+    <!-- Requesting an SMS permission implies telephony hardware, which would keep the app off
+         every Wi-Fi-only tablet and Chromebook. SMS capture is one optional feature among many,
+         so the requirement is declared explicitly optional. -->
+    <uses-feature android:name="android.hardware.telephony" android:required="false"/>
 
     <!-- Budget alerts, bill reminders and goal milestones (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>

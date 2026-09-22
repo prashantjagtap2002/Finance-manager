@@ -59,7 +59,7 @@ fun MainNavigation(
     val isTopLevel = bottomTabs.any { it.key == currentKey }
     val selectedTabIndex = bottomTabs.indexOfFirst { it.key == currentKey }.coerceAtLeast(0)
     val emphasized = remember { CubicBezierEasing(0.2f, 0f, 0f, 1f) }
-    val tabItems = remember { bottomTabs.map { iOSTabItem(it.icon, it.label) } }
+    val tabItems = remember { bottomTabs.map { IosTabItem(it.icon, it.label) } }
 
     Scaffold(
         containerColor = if (LocalThemeIsDark.current) iOSBackgroundDark else iOSBackgroundLight,
@@ -70,7 +70,7 @@ fun MainNavigation(
                 exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
             ) {
                 // Compact bottom navigation shared by top-level destinations.
-                iOSTabBar(
+                IosTabBar(
                     selectedTab = selectedTabIndex,
                     onTabSelected = { index ->
                         val tab = bottomTabs[index]

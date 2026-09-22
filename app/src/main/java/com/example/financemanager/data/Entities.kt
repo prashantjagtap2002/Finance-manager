@@ -242,7 +242,18 @@ data class InvestmentTransaction(
     val amount: Double, // quantity * pricePerUnit, stored to avoid recomputation/rounding drift
     val date: Long,
     val sourceAccountId: Long,
-    val isSip: Boolean = false
+    val isSip: Boolean = false,
+    /**
+     * The ledger row this trade's cash leg created, or 0 for trades logged before the link
+     * existed.
+     *
+     * A buy takes money out of an account and a sell puts it back, recorded as an ordinary
+     * transfer so the balance and the ledger keep agreeing. Without knowing which row that was,
+     * editing or deleting the trade could only post a fresh offsetting adjustment and hope the
+     * amounts still matched — and editing did not even do that, so a corrected quantity left the
+     * account permanently wrong.
+     */
+    val ledgerTransactionId: Long = 0
 )
 
 /**
@@ -260,3 +271,39 @@ data class MerchantRule(
     val hitCount: Int = 1,
     val updatedAt: Long = System.currentTimeMillis()
 )
+
+/**
+ * A row this device deleted, remembered so the cloud merge can tell "deleted here" apart from
+ * "created on another device and not pulled yet".
+ *
+ * Without it the merge had to read a missing row as a deletion, which is only true when this
+ * device has already seen everything the server holds. The moment a second device adds a
+ * transaction, the first one sees a server row it has never had and — under that reading — deletes
+ * the user's data from the cloud. A tombstone makes the deletion an explicit fact instead of an
+ * inference, so the only thing an unknown row can do now is arrive.
+ *
+ * Tombstones are written for the seven tables cloud sync covers, on the paths where the *user*
+ * deleted something. Bulk replacements (a backup restore, a full wipe) deliberately write none:
+ * those are "this is my data now" rather than "delete that", and turning them into cloud deletions
+ * is exactly the irreversible move this table exists to prevent.
+ *
+ * [rowId] is the primary key of the deleted row, and [tableName] the cloud table it belonged to.
+ * They are a composite key so re-deleting the same id is idempotent.
+ */
+@Entity(tableName = "deleted_records", primaryKeys = ["tableName", "rowId"])
+data class DeletedRecord(
+    val tableName: String,
+    val rowId: Long,
+    val deletedAt: Long = System.currentTimeMillis()
+)
+
+/** The cloud tables a [DeletedRecord] can name — the seven that sync. */
+object SyncTables {
+    const val ACCOUNTS = "accounts"
+    const val CATEGORIES = "categories"
+    const val TRANSACTIONS = "transactions"
+    const val SAVINGS_GOALS = "savings_goals"
+    const val RECURRING_TRANSACTIONS = "recurring_transactions"
+    const val DEBTS = "debts"
+    const val SMS_TRANSACTIONS = "sms_transactions"
+}

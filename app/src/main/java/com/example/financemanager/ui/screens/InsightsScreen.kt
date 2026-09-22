@@ -65,8 +65,8 @@ import androidx.compose.ui.unit.sp
 import com.example.financemanager.data.TransactionType
 import com.example.financemanager.theme.*
 import com.example.financemanager.theme.Typography
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSCardStyle
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosCardStyle
 import com.example.financemanager.ui.components.VerticalBar
 import com.example.financemanager.ui.components.rememberBarFraction
 import com.example.financemanager.ui.components.moneyString
@@ -557,7 +557,7 @@ fun InsightsScreen(
                 // 0. Bar Chart Card (Supports horizontal swipe left/right to navigate periods)
                 item {
                     var totalDragAmount by remember { mutableFloatStateOf(0f) }
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .pointerInput(Unit) {
@@ -584,7 +584,7 @@ fun InsightsScreen(
                                     }
                                 )
                             },
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Column(
                             modifier = Modifier.padding(20.dp)
@@ -608,9 +608,9 @@ fun InsightsScreen(
                 
                 // 0.5. Daily Amount Line Graph (straight lines, tap a point to read the amount)
                 item {
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier.fillMaxWidth(),
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
                             DailyAmountLineChart(
@@ -626,9 +626,9 @@ fun InsightsScreen(
 
                 // 1. Donut Chart Card
                 item {
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier.fillMaxWidth(),
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Column(
                             modifier = Modifier.padding(20.dp),
@@ -707,9 +707,9 @@ fun InsightsScreen(
 
                 // 1.5. Income vs. Expense Comparison Chart Card
                 item {
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier.fillMaxWidth(),
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
                             IncomeVsExpenseComparisonChart(
@@ -722,9 +722,9 @@ fun InsightsScreen(
 
                 // 1.8. Cumulative Cash Flow Trajectory Curve Card
                 item {
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier.fillMaxWidth(),
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
                             CumulativeCashFlowTrendChart(
@@ -738,9 +738,9 @@ fun InsightsScreen(
 
                 // 2. Key Insights Card
                 item {
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier.fillMaxWidth(),
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
                             Row(
@@ -789,9 +789,9 @@ fun InsightsScreen(
 
                 // 3. Achievements Card (lifetime milestones)
                 item {
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier.fillMaxWidth(),
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
                             Row(
@@ -867,9 +867,9 @@ fun InsightsScreen(
 
                 // 4. Cash Flow Forecast (to the end of the selected period)
                 item {
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier.fillMaxWidth(),
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Column(modifier = Modifier.padding(20.dp)) {
                             Row(

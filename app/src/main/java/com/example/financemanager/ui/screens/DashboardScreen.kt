@@ -54,9 +54,9 @@ import com.example.financemanager.data.Transaction
 import com.example.financemanager.data.TransactionType
 import com.example.financemanager.theme.*
 import com.example.financemanager.ui.components.*
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSTopAppBar
-import com.example.financemanager.ui.components.iOSListSeparator
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosTopAppBar
+import com.example.financemanager.ui.components.IosListSeparator
 import com.example.financemanager.theme.LocalThemeIsDark
 import com.example.financemanager.ui.components.EmptyState
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
@@ -94,7 +94,6 @@ fun DashboardScreen(
     val goals by viewModel.savingsGoals.collectAsStateWithLifecycle()
     val recurring by viewModel.recurringTransactions.collectAsStateWithLifecycle()
     val isPrivacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
-    val safeToSpend by viewModel.safeToSpend.collectAsStateWithLifecycle(initialValue = 0.0)
     val badges by viewModel.unlockedBadges.collectAsStateWithLifecycle()
     val aiRecap by viewModel.aiRecapText.collectAsStateWithLifecycle()
     // Read so the pace calculation below re-runs when the user changes their cycle settings.
@@ -113,7 +112,12 @@ fun DashboardScreen(
     val scope = rememberCoroutineScope()
 
     val accountsListState = rememberLazyListState()
-    val totalBalance = remember(accounts) { accounts.sumOf { it.balance } }
+    // Totals come from the view model rather than being summed here, because summing every
+    // account's balance is only arithmetic while they share a currency. The home-currency total
+    // and anything held in another currency are separate numbers; the second is normally empty.
+    val totalBalance by viewModel.totalBalance.collectAsStateWithLifecycle()
+    val foreignBalances by viewModel.foreignCurrencyBalances.collectAsStateWithLifecycle()
+    val foreignSpend by viewModel.foreignCurrencySpend.collectAsStateWithLifecycle()
 
     // "How much have I spent" is only half the question the home screen should answer. Comparing
     // spend-so-far against how far the pay cycle has actually run turns the number into a verdict:
@@ -165,7 +169,7 @@ fun DashboardScreen(
     Scaffold(
         topBar = {
             val isDark = LocalThemeIsDark.current
-            iOSTopAppBar(
+            IosTopAppBar(
                 title = "Finance",
                 actions = {
                     IconButton(onClick = onNavigateToSearch) {
@@ -217,9 +221,9 @@ fun DashboardScreen(
         ) {
             cashflowWarning?.let { warningMsg ->
                 item {
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier.fillMaxWidth(),
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Row(
                             modifier = Modifier.padding(iOSSpacingMedium),
@@ -235,7 +239,7 @@ fun DashboardScreen(
 
             if (unverifiedTxs.isNotEmpty()) {
                 item {
-                    iOSCard(modifier = Modifier.fillMaxWidth()) {
+                    IosCard(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -282,11 +286,11 @@ fun DashboardScreen(
 
             // 1. Hero Card: Displays Current Month Spent & Total Balance (Clickable for Financial Insights & Balances)
             item {
-                iOSCard(
+                IosCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { showInsightsSheet = true },
-                    style = iOSCardStyle.Grouped
+                    style = IosCardStyle.Grouped
                 ) {
                     // Left-aligned and unpilled: one small label, one large number,
                     // a hairline, then the secondary figure. The number is the
@@ -353,6 +357,7 @@ fun DashboardScreen(
                                     text = moneyString(totalBalance, isPrivacy, decimals = 0),
                                     style = Typography.titleLarge.copy(color = TextPrimary)
                                 )
+                                ForeignCurrencyNote(foreignBalances, isPrivacy)
                             }
                             Icon(
                                 Icons.Default.ChevronRight,
@@ -379,7 +384,7 @@ fun DashboardScreen(
                         animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
                         label = "quickScale1"
                     )
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier
                             .weight(1f)
                             // Read inside the layer block rather than unwrapped above it: a press
@@ -415,7 +420,7 @@ fun DashboardScreen(
                         animationSpec = spring(dampingRatio = 0.6f, stiffness = 400f),
                         label = "quickScale2"
                     )
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier
                             .weight(1f)
                             // Read inside the layer block rather than unwrapped above it: a press
@@ -448,9 +453,9 @@ fun DashboardScreen(
             // AI Recap Card
             aiRecap?.let { text ->
                 if ("intelligence" in dashboardSections) item {
-                    iOSCard(
+                    IosCard(
                         modifier = Modifier.fillMaxWidth(),
-                        style = iOSCardStyle.Grouped
+                        style = IosCardStyle.Grouped
                     ) {
                         Row(
                             modifier = Modifier.padding(16.dp),
@@ -496,7 +501,7 @@ fun DashboardScreen(
             // 2. Upcoming bills strip (only when something is due this week)
             if (upcomingBills.isNotEmpty()) {
                 item {
-                    iOSCard(modifier = Modifier.fillMaxWidth()) {
+                    IosCard(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -548,7 +553,7 @@ fun DashboardScreen(
             // 3. Savings goals snapshot
             if (goals.isNotEmpty()) {
                 item {
-                    iOSCard(modifier = Modifier.fillMaxWidth()) {
+                    IosCard(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(16.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -859,7 +864,7 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Total Balance Card
-                iOSCard(modifier = Modifier.fillMaxWidth()) {
+                IosCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text("Total Account Balance", style = Typography.labelMedium.copy(color = TextSecondary))
                         Spacer(modifier = Modifier.height(4.dp))
@@ -867,6 +872,7 @@ fun DashboardScreen(
                             moneyString(totalBalance, isPrivacy, decimals = 2),
                             style = Typography.headlineMedium.copy(color = AccentGreen, fontWeight = FontWeight.Bold)
                         )
+                        ForeignCurrencyNote(foreignBalances, isPrivacy)
                     }
                 }
 
@@ -877,7 +883,7 @@ fun DashboardScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    iOSCard(modifier = Modifier.weight(1f)) {
+                    IosCard(modifier = Modifier.weight(1f)) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text("Income", style = Typography.labelSmall.copy(color = TextMuted))
                             Spacer(modifier = Modifier.height(4.dp))
@@ -887,17 +893,18 @@ fun DashboardScreen(
                             )
                         }
                     }
-                    iOSCard(modifier = Modifier.weight(1f)) {
+                    IosCard(modifier = Modifier.weight(1f)) {
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text("Expenses", style = Typography.labelSmall.copy(color = TextMuted))
                             Spacer(modifier = Modifier.height(4.dp))
+                            ForeignCurrencyNote(foreignSpend, isPrivacy, prefix = "Plus")
                             Text(
                                 moneyString(monthlySpent, isPrivacy, decimals = 0),
                                 style = Typography.titleMedium.copy(color = AlertRed, fontWeight = FontWeight.Bold)
                             )
                         }
                     }
-                    iOSCard(modifier = Modifier.weight(1f)) {
+                    IosCard(modifier = Modifier.weight(1f)) {
                         val net = monthlyIncome - monthlySpent
                         Column(modifier = Modifier.padding(12.dp)) {
                             Text("Net Flow", style = Typography.labelSmall.copy(color = TextMuted))
@@ -952,7 +959,7 @@ fun DashboardScreen(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 // Button to open full Reports & Insights
-                iOSButton(
+                IosButton(
                     onClick = {
                         showInsightsSheet = false
                         onNavigateToInsights()
@@ -1018,11 +1025,11 @@ fun AccountCard(
         com.example.financemanager.data.AccountType.WALLET -> WarningAmber
     }
 
-    iOSCard(
+    IosCard(
         modifier = modifier
             .width(160.dp)
             .height(105.dp),
-        style = iOSCardStyle.Grouped
+        style = IosCardStyle.Grouped
     ) {
         Box(
             modifier = Modifier
@@ -1095,7 +1102,7 @@ fun EnvelopeProgressItem(
 
     var menuExpanded by remember { mutableStateOf(false) }
 
-    iOSCard(
+    IosCard(
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
@@ -1332,7 +1339,7 @@ fun TransactionItem(
     val dateFormatter = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault())
     val formattedDate = dateFormatter.format(Date(transaction.date))
 
-    iOSCard(
+    IosCard(
         modifier = modifier.fillMaxWidth()
     ) {
         Box(

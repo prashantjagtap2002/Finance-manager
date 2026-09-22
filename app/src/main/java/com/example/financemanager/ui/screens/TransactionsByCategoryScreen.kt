@@ -43,7 +43,7 @@ import com.example.financemanager.theme.TextPrimary
 import com.example.financemanager.theme.TextSecondary
 import com.example.financemanager.theme.Typography
 import com.example.financemanager.theme.WarningAmber
-import com.example.financemanager.ui.components.iOSCard
+import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import java.text.SimpleDateFormat
@@ -527,7 +527,7 @@ private fun SelectableTransactionRow(
 ) {
     val dateFormatter = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
 
-    iOSCard(
+    IosCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onToggle() }
@@ -585,7 +585,7 @@ fun TransactionCategoryItem(
 ) {
     val dateFormatter = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
 
-    iOSCard(modifier = Modifier.fillMaxWidth()) {
+    IosCard(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

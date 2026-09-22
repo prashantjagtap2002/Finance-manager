@@ -35,10 +35,10 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSCardStyle
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosCardStyle
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Checkbox
@@ -515,7 +515,7 @@ fun QuickEntryScreen(
 
             receiptResult?.takeIf { it.items.isNotEmpty() }?.let { result ->
                 item {
-                    iOSCard(modifier = Modifier.fillMaxWidth()) {
+                    IosCard(modifier = Modifier.fillMaxWidth()) {
                         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                             Text("Scanned Items (${result.items.size})", style = Typography.bodyLarge.copy(color = TextPrimary, fontWeight = FontWeight.Bold))
                             result.items.take(4).forEach { item ->
@@ -561,9 +561,9 @@ fun QuickEntryScreen(
                     ) { DatePicker(state = subDatePickerState) }
                 }
 
-                iOSCard(
+                IosCard(
                     modifier = Modifier.fillMaxWidth(),
-                    style = iOSCardStyle.Grouped
+                    style = IosCardStyle.Grouped
                 ) {
                     Column {
                         Row(
@@ -653,21 +653,21 @@ fun QuickEntryScreen(
             }
 
             item {
-                iOSButton(
+                IosButton(
                     onClick = {
                         val amount = amountText.toDoubleOrNull() ?: 0.0
                         val srcAccountId = selectedAccountId
                         if (amount <= 0.0) {
                             notify("Enter an amount greater than zero")
-                            return@iOSButton
+                            return@IosButton
                         }
                         if (srcAccountId == null) {
                             notify("Pick the account this came from")
-                            return@iOSButton
+                            return@IosButton
                         }
                         if (selectedType == TransactionType.TRANSFER && destinationAccountId == null && noteInput.isBlank()) {
                             notify("Pick a destination account, or add a note for the transfer")
-                            return@iOSButton
+                            return@IosButton
                         }
 
                         if (isSplitTransaction) {
@@ -678,7 +678,7 @@ fun QuickEntryScreen(
                             val splitTotal = parsedSplits.sumOf { it.second }
                             if (kotlin.math.abs(splitTotal - amount) > 0.01) {
                                 notify("The split amounts have to add up to the total")
-                                return@iOSButton
+                                return@IosButton
                             }
                             val taggedNote = listOf(noteInput.ifBlank { nlpTextInput.ifBlank { "Split transaction" } }, hashtagInput.trim()).filter { it.isNotBlank() }.joinToString(" ")
                             viewModel.addSplitTransaction(
@@ -712,7 +712,7 @@ fun QuickEntryScreen(
                         onNavigateBack()
                     },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = MaterialTheme.colorScheme.primary
                 ) {
                     Text("Save Transaction", style = Typography.titleMedium.copy(fontWeight = FontWeight.Bold))

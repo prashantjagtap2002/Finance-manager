@@ -69,7 +69,7 @@ class SmsNotificationListenerService : NotificationListenerService() {
         val postedAt = sbn.postTime
 
         serviceScope.launch {
-            val dao = FinanceDatabase.getDatabase(applicationContext).financeDao()
+            val dao = FinanceDatabase.getDatabase(applicationContext).dao()
             val insertedId = dao.insertSmsTransaction(
                 SmsTransaction(
                     smsHash = hash,

@@ -88,9 +88,9 @@ fun EmptyState(
         )
         if (actionLabel != null && onAction != null) {
             Spacer(modifier = Modifier.height(24.dp))
-            iOSButton(
+            IosButton(
                 onClick = onAction,
-                variant = iOSButtonVariant.Accent,
+                variant = IosButtonVariant.Accent,
                 accentColor = accent,
                 modifier = Modifier.clip(RoundedCornerShape(12.dp))
             ) {

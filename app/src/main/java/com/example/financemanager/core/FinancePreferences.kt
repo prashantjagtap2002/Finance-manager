@@ -30,6 +30,7 @@ enum class PayCycleFrequency {
 object FinancePreferences {
     private const val PREFS_NAME = "finance_prefs"
     private const val KEY_CURRENCY_CODE = "currency_code"
+    private const val KEY_CURRENCY_NORMALIZED_FOR = "currency_normalized_for"
     private const val KEY_THEME_MODE = "theme_mode"
     private const val KEY_IS_PRO_USER = "is_pro_user"
     private const val KEY_SCAN_MONTH = "scan_month"
@@ -164,6 +165,21 @@ object FinancePreferences {
     }
 
     fun currentCurrencySymbol(): String = currencyOption(_currencyCodeFlow.value).symbol
+
+    /**
+     * The home currency the stored rows were last re-stamped for, or "" if that has never run.
+     *
+     * Every amount in the app is displayed in the home currency, but the per-row `currency` columns
+     * kept whatever default they were created with — so a total that added them together was adding
+     * numbers whose codes disagreed on paper even though they never disagreed in meaning. This
+     * remembers whether that has been reconciled, so the one-time pass runs once per currency
+     * change rather than on every launch.
+     */
+    fun currencyNormalizedFor(): String = prefs().getString(KEY_CURRENCY_NORMALIZED_FOR, "") ?: ""
+
+    fun setCurrencyNormalizedFor(code: String) {
+        prefs().edit().putString(KEY_CURRENCY_NORMALIZED_FOR, code).apply()
+    }
 
     fun setCurrencyCode(code: String) {
         val normalized = supportedCurrencies.firstOrNull { it.code == code }?.code ?: "INR"

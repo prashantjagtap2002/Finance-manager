@@ -40,8 +40,8 @@ import androidx.compose.ui.unit.sp
 import com.example.financemanager.data.AccountType
 import com.example.financemanager.data.DebtType
 import com.example.financemanager.theme.*
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSCardStyle
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosCardStyle
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import kotlin.math.roundToInt
@@ -119,9 +119,9 @@ fun NetWorthScreen(
         ) {
             // 1. Total Net Worth Hero Card
             item {
-                iOSCard(
+                IosCard(
                     modifier = Modifier.fillMaxWidth(),
-                    style = iOSCardStyle.Grouped
+                    style = IosCardStyle.Grouped
                 ) {
                     Column(
                         modifier = Modifier
@@ -207,9 +207,9 @@ fun NetWorthScreen(
 
             // 2. Net Worth Trend Line Chart with Dynamic Period Filter Pills
             item {
-                iOSCard(
+                IosCard(
                     modifier = Modifier.fillMaxWidth(),
-                    style = iOSCardStyle.Grouped
+                    style = IosCardStyle.Grouped
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Row(
@@ -271,9 +271,9 @@ fun NetWorthScreen(
 
             // 3. Assets vs Liabilities Ratio Bar & Allocation Breakdown
             item {
-                iOSCard(
+                IosCard(
                     modifier = Modifier.fillMaxWidth(),
-                    style = iOSCardStyle.Grouped
+                    style = IosCardStyle.Grouped
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text("Assets vs. Liabilities", style = Typography.titleMedium.copy(color = TextPrimary))
@@ -335,9 +335,9 @@ fun NetWorthScreen(
 
             // 4. Detailed Accounts Allocation List
             item {
-                iOSCard(
+                IosCard(
                     modifier = Modifier.fillMaxWidth(),
-                    style = iOSCardStyle.Grouped
+                    style = IosCardStyle.Grouped
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text("Account Allocation", style = Typography.titleMedium.copy(color = TextPrimary))
@@ -411,9 +411,9 @@ fun NetWorthScreen(
 
             // 5. Financial Health Milestone Progress
             item {
-                iOSCard(
+                IosCard(
                     modifier = Modifier.fillMaxWidth(),
-                    style = iOSCardStyle.Grouped
+                    style = IosCardStyle.Grouped
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

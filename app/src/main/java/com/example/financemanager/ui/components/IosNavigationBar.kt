@@ -48,14 +48,14 @@ import com.example.financemanager.theme.TextPrimary
  * is reserved for actions and money.
  */
 
-data class iOSTabItem(
+data class IosTabItem(
     val icon: ImageVector,
     val label: String
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun iOSTopAppBar(
+fun IosTopAppBar(
     title: String,
     modifier: Modifier = Modifier,
     navigationIcon: @Composable () -> Unit = {},
@@ -92,7 +92,7 @@ fun iOSTopAppBar(
 }
 
 @Composable
-fun iOSBackButton(onClick: () -> Unit) {
+fun IosBackButton(onClick: () -> Unit) {
     IconButton(onClick = onClick) {
         Icon(
             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
@@ -107,10 +107,10 @@ fun iOSBackButton(onClick: () -> Unit) {
  * than a coloured pill, which keeps five tabs from turning into five badges.
  */
 @Composable
-fun iOSTabBar(
+fun IosTabBar(
     selectedTab: Int,
     onTabSelected: (Int) -> Unit,
-    tabs: List<iOSTabItem>,
+    tabs: List<IosTabItem>,
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -131,7 +131,7 @@ fun iOSTabBar(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 tabs.forEachIndexed { index, tab ->
-                    iOSTabBarItem(
+                    IosTabBarItem(
                         selected = selectedTab == index,
                         onClick = { onTabSelected(index) },
                         icon = tab.icon,
@@ -144,7 +144,7 @@ fun iOSTabBar(
 }
 
 @Composable
-fun iOSTabBarItem(
+fun IosTabBarItem(
     selected: Boolean,
     onClick: () -> Unit,
     icon: ImageVector,

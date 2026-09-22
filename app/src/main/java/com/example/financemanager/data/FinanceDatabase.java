@@ -11,8 +11,8 @@ import androidx.room.migration.Migration;
 import java.security.SecureRandom;
 
 @Database(
-    entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class, MerchantRule.class, Investment.class, InvestmentTransaction.class, ExpenseGroup.class, ExpenseGroupMember.class, ExpenseGroupExpense.class},
-    version = 20,
+    entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class, MerchantRule.class, Investment.class, InvestmentTransaction.class, ExpenseGroup.class, ExpenseGroupMember.class, ExpenseGroupExpense.class, DeletedRecord.class},
+    version = 21,
     // Exported schemas are what MigrationTestHelper replays old databases against. Without them
     // nothing checks that the hand-written migrations below still agree with the entities.
     exportSchema = true
@@ -20,7 +20,33 @@ import java.security.SecureRandom;
 @TypeConverters({Converters.class})
 public abstract class FinanceDatabase extends RoomDatabase {
 
+    /**
+     * The DAO Room generates. Prefer {@link #dao()} — this one cannot make the ledger's
+     * write-then-adjust pairs atomic.
+     */
     public abstract FinanceDao financeDao();
+
+    private volatile FinanceDao transactionalDao;
+
+    /**
+     * The DAO every caller should use: the generated one wrapped so that a group of writes can be
+     * committed as a single all-or-nothing transaction.
+     *
+     * Recording a transaction and moving the balances behind it are one event described in two
+     * statements. Run apart, a process death between them leaves the ledger disagreeing with the
+     * balances and nothing able to tell that apart from genuine drift. See
+     * {@code TransactionalFinanceDao} and {@code AccountLedger}.
+     */
+    public FinanceDao dao() {
+        FinanceDao existing = transactionalDao;
+        if (existing != null) return existing;
+        synchronized (this) {
+            if (transactionalDao == null) {
+                transactionalDao = new TransactionalFinanceDao(this, financeDao());
+            }
+            return transactionalDao;
+        }
+    }
 
     private static volatile FinanceDatabase INSTANCE;
 
@@ -344,6 +370,35 @@ public abstract class FinanceDatabase extends RoomDatabase {
         }
     };
 
+    /**
+     * Adds the tombstone table that makes deleting a cloud row safe.
+     *
+     * Before it, the sync had to read "row on the server, not on this device" as a deletion, which
+     * is also what a row created on a second device looks like — so the first device could delete
+     * the user's new data out of the cloud before it had ever pulled it. A deletion is now a fact
+     * this device wrote down rather than something inferred from absence. Existing databases start
+     * with no tombstones, which is exactly right: nothing they are missing was provably deleted, so
+     * nothing gets removed from the cloud on the strength of a guess.
+     */
+    public static final Migration MIGRATION_20_21 = new Migration(20, 21) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "CREATE TABLE IF NOT EXISTS `deleted_records` (" +
+                "`tableName` TEXT NOT NULL, " +
+                "`rowId` INTEGER NOT NULL, " +
+                "`deletedAt` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`tableName`, `rowId`))"
+            );
+            // Lets an investment trade say which ledger row moved its cash, so editing or deleting
+            // the trade can undo that exact movement. Existing trades keep 0, which the repository
+            // reads as "no link" and handles with an offsetting adjustment instead.
+            database.execSQL(
+                "ALTER TABLE investment_transactions ADD COLUMN ledgerTransactionId INTEGER NOT NULL DEFAULT 0"
+            );
+        }
+    };
+
     public static FinanceDatabase getDatabase(final Context context) {
         if (INSTANCE == null) {
             synchronized (FinanceDatabase.class) {
@@ -353,7 +408,7 @@ public abstract class FinanceDatabase extends RoomDatabase {
                         FinanceDatabase.class,
                         "finance_database"
                     )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21)
                     // The migration chain starts at 2: there is no record of what version 1 looked
                     // like, so no 1 -> 2 migration can be written. Room's answer to a missing
                     // migration is to throw on open, which for a version-1 database means an app

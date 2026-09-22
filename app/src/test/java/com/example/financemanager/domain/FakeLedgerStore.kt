@@ -11,12 +11,42 @@ import com.example.financemanager.data.TransactionType
  * in `FinanceDao` so the reconciliation tests exercise the same definition of "what the
  * transactions add up to".
  */
-class FakeLedgerStore : RecurringStore {
+class FakeLedgerStore : RecurringStore, TransactionalStore {
 
     val accounts = mutableMapOf<Long, Account>()
     val recurring = mutableMapOf<Long, RecurringTransaction>()
     val transactions = mutableListOf<Transaction>()
     private var nextTransactionId = 1L
+
+    /**
+     * How deep inside [transact] the store currently is, and how deep it has ever been.
+     *
+     * A real database gives the ledger all-or-nothing writes; here they stand in for it, so a test
+     * can assert that a write and the balance move it implies happened inside one unit rather than
+     * as two statements a crash could land between.
+     */
+    var transactionDepth = 0
+        private set
+    var deepestTransaction = 0
+        private set
+
+    override suspend fun <R> transact(block: suspend () -> R): R {
+        transactionDepth++
+        deepestTransaction = maxOf(deepestTransaction, transactionDepth)
+        try {
+            return block()
+        } finally {
+            transactionDepth--
+        }
+    }
+
+    /** Whether every write since the store was created happened inside a transaction. */
+    val writesOutsideTransaction: Int get() = looseWrites
+    private var looseWrites = 0
+
+    private fun recordWrite() {
+        if (transactionDepth == 0) looseWrites++
+    }
 
     fun addAccount(id: Long, balance: Double, openingBalance: Double = balance): Account {
         val account = Account(
@@ -37,21 +67,25 @@ class FakeLedgerStore : RecurringStore {
     override suspend fun getAccountsList(): List<Account> = accounts.values.toList()
 
     override suspend fun updateAccount(account: Account) {
+        recordWrite()
         accounts[account.id] = account
     }
 
     override suspend fun insertTransaction(transaction: Transaction): Long {
+        recordWrite()
         val id = if (transaction.id != 0L) transaction.id else nextTransactionId++
         transactions.add(transaction.copy(id = id))
         return id
     }
 
     override suspend fun updateTransaction(transaction: Transaction) {
+        recordWrite()
         val index = transactions.indexOfFirst { it.id == transaction.id }
         if (index >= 0) transactions[index] = transaction else transactions.add(transaction)
     }
 
     override suspend fun deleteTransaction(transaction: Transaction) {
+        recordWrite()
         transactions.removeAll { it.id == transaction.id }
     }
 

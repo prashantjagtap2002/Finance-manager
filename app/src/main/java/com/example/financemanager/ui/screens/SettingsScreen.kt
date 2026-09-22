@@ -36,9 +36,9 @@ import com.example.financemanager.services.PdfExportResult
 import com.example.financemanager.services.SyncWorker
 import kotlinx.coroutines.launch
 import com.example.financemanager.theme.*
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
-import com.example.financemanager.ui.components.iOSCard
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 
@@ -171,7 +171,7 @@ fun SettingsScreen(
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
-                iOSCard(
+                IosCard(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -240,7 +240,7 @@ fun SettingsScreen(
             item {
                 Text("Preferences", style = Typography.titleMedium.copy(color = TextPrimary))
                 Spacer(modifier = Modifier.height(8.dp))
-                iOSCard(modifier = Modifier.fillMaxWidth()) {
+                IosCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Row(
                             modifier = Modifier
@@ -288,7 +288,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("Security & Privacy", style = Typography.titleMedium.copy(color = TextPrimary))
                 Spacer(modifier = Modifier.height(8.dp))
-                iOSCard(modifier = Modifier.fillMaxWidth()) {
+                IosCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -396,7 +396,7 @@ fun SettingsScreen(
 
             // 3. Subscriptions shortcut
             item {
-                iOSCard(
+                IosCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onNavigateToSubscriptions() }
@@ -421,7 +421,7 @@ fun SettingsScreen(
             }
             // SMS Transactions shortcut
             item {
-                iOSCard(
+                IosCard(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable { onNavigateToSmsTransactions() }
@@ -448,13 +448,13 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("Data Management", style = Typography.titleMedium.copy(color = TextPrimary))
                 Spacer(modifier = Modifier.height(8.dp))
-                iOSCard(modifier = Modifier.fillMaxWidth()) {
+                IosCard(modifier = Modifier.fillMaxWidth()) {
                     Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        iOSButton(
+                        IosButton(
                             onClick = {
                                 csvExportLauncher.launch("transactions.csv")
                             },
-                            variant = iOSButtonVariant.Accent, accentColor = PrimaryViolet,
+                            variant = IosButtonVariant.Accent, accentColor = PrimaryViolet,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Export to CSV / Excel")
@@ -469,9 +469,9 @@ fun SettingsScreen(
                             }
                         }
 
-                        iOSButton(
+                        IosButton(
                             onClick = { importLauncher.launch("text/comma-separated-values") },
-                            variant = iOSButtonVariant.Accent, accentColor = DarkSurface,
+                            variant = IosButtonVariant.Accent, accentColor = DarkSurface,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Text("Import Transactions from CSV")
@@ -483,7 +483,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("Cloud Sync", style = Typography.titleMedium.copy(color = TextPrimary))
                 Spacer(modifier = Modifier.height(8.dp))
-                iOSCard(
+                IosCard(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -520,13 +520,13 @@ fun SettingsScreen(
                         }
                         if (isCloudSyncEnabled) {
                             Text(syncStatus, style = Typography.labelMedium.copy(color = if (syncStatus.contains("failed", true)) AlertRed else AccentGreen))
-                            iOSButton(
+                            IosButton(
                                 onClick = {
                                     val request = OneTimeWorkRequestBuilder<SyncWorker>().build()
                                     WorkManager.getInstance(context).enqueue(request)
                                     notify("Cloud sync started in the background")
                                 },
-                                variant = iOSButtonVariant.Accent, accentColor = AccentGreen,
+                                variant = IosButtonVariant.Accent, accentColor = AccentGreen,
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Icon(Icons.Default.CloudUpload, contentDescription = "Sync to Cloud")
@@ -544,7 +544,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.height(16.dp))
                 Text("Data & Local Backups", style = Typography.titleMedium.copy(color = TextPrimary))
                 Spacer(modifier = Modifier.height(8.dp))
-                iOSCard(
+                IosCard(
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(
@@ -563,18 +563,18 @@ fun SettingsScreen(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            iOSButton(
+                            IosButton(
                                 onClick = { exportLauncher.launch("financemanager_backup.json") },
-                                variant = iOSButtonVariant.Accent, accentColor = PrimaryViolet,
+                                variant = IosButtonVariant.Accent, accentColor = PrimaryViolet,
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(Icons.Default.FileDownload, contentDescription = "Export")
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Export JSON")
                             }
-                            iOSButton(
+                            IosButton(
                                 onClick = { importLauncher.launch(arrayOf("application/json")) },
-                                variant = iOSButtonVariant.Accent, accentColor = SecondaryTeal,
+                                variant = IosButtonVariant.Accent, accentColor = SecondaryTeal,
                                 modifier = Modifier.weight(1f)
                             ) {
                                 Icon(Icons.Default.FileUpload, contentDescription = "Import")
@@ -593,7 +593,7 @@ fun SettingsScreen(
                             text = "Generate a professional monthly PDF report of all transactions.",
                             style = Typography.bodyMedium.copy(color = TextSecondary)
                         )
-                        iOSButton(
+                        IosButton(
                             onClick = {
                                 val monthFormat = java.text.SimpleDateFormat("MMMM yyyy", java.util.Locale.getDefault())
                                 val currentMonth = monthFormat.format(java.util.Date())
@@ -607,7 +607,7 @@ fun SettingsScreen(
                                     }
                                 }
                             },
-                            variant = iOSButtonVariant.Accent, accentColor = TextPrimary,
+                            variant = IosButtonVariant.Accent, accentColor = TextPrimary,
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             Icon(Icons.Default.PictureAsPdf, contentDescription = "PDF", tint = DeepBackground)
@@ -835,7 +835,7 @@ fun SettingsScreen(
                 }
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         if (accountName.isNotEmpty()) {
                             val balance = accountBalance.toDoubleOrNull() ?: 0.0
@@ -843,7 +843,7 @@ fun SettingsScreen(
                             showAddAccountDialog = false
                         }
                     },
-                    variant = iOSButtonVariant.Accent, accentColor = PrimaryViolet
+                    variant = IosButtonVariant.Accent, accentColor = PrimaryViolet
                 ) {
                     Text("Add")
                 }
@@ -917,7 +917,7 @@ fun SettingsScreen(
                 }
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         if (editName.isNotEmpty()) {
                             val newBalance = editBalance.toDoubleOrNull() ?: account.balance
@@ -926,7 +926,7 @@ fun SettingsScreen(
                             editingAccount = null
                         }
                     },
-                    variant = iOSButtonVariant.Accent, accentColor = SecondaryTeal
+                    variant = IosButtonVariant.Accent, accentColor = SecondaryTeal
                 ) {
                     Text("Save")
                 }
@@ -954,7 +954,7 @@ fun SettingsScreen(
                 )
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         val uri = selectedImportUri
                         if (uri != null) {
@@ -972,7 +972,7 @@ fun SettingsScreen(
                         showImportConfirmDialog = false
                         selectedImportUri = null
                     },
-                    variant = iOSButtonVariant.Accent, accentColor = AlertRed
+                    variant = IosButtonVariant.Accent, accentColor = AlertRed
                 ) {
                     Text("Overwrite & Restore")
                 }

@@ -16,6 +16,7 @@ import com.example.financemanager.services.NotificationHelper
 import com.example.financemanager.services.PdfExportResult
 import com.example.financemanager.services.SyncWorker
 import com.example.financemanager.domain.MerchantKey
+import com.example.financemanager.domain.Money
 import com.example.financemanager.domain.NlpParser
 import com.example.financemanager.domain.NlpResult
 import com.example.financemanager.domain.SmsLink
@@ -43,7 +44,14 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.util.Calendar
 
-/** Per-holding aggregate derived from an [Investment] and its buy/sell/SIP transaction history. */
+/**
+ * Per-holding aggregate derived from an [Investment] and its buy/sell/SIP transaction history.
+ *
+ * [gainLoss] is *unrealised* only — what the units still held would make if sold at today's price.
+ * Profit already taken lives in [realizedGain] and is deliberately kept apart: folding the two
+ * together, as the old average-price arithmetic did, made a holding that had been sold at a profit
+ * and re-bought lower look like a loss.
+ */
 data class InvestmentHolding(
     val investment: Investment,
     val quantity: Double,
@@ -52,8 +60,69 @@ data class InvestmentHolding(
     val currentValue: Double,
     val gainLoss: Double,
     val gainLossPercent: Double,
+    /** Profit or loss on units already sold, priced against their cost at the moment of sale. */
+    val realizedGain: Double,
     val hasSip: Boolean
-)
+) {
+    /** Everything this holding has made, taken and untaken. */
+    val totalGain: Double get() = gainLoss + realizedGain
+}
+
+/**
+ * Walks one holding's trades in date order and works out what is still held, what it cost, and
+ * what has already been made.
+ *
+ * Cost basis is path-dependent: a sale has to be priced against the average cost of the units held
+ * *at that moment*, because that is the money those particular units consumed. The previous
+ * calculation averaged every buy that had ever happened and multiplied by the current quantity,
+ * which silently assumed no units had ever been sold — so after any partial sale both the invested
+ * amount and the gain were wrong, and the realised profit was nowhere at all.
+ */
+internal fun computeHolding(
+    investment: Investment,
+    trades: List<InvestmentTransaction>
+): InvestmentHolding {
+    var quantity = 0.0
+    var costBasis = 0.0
+    var realized = 0.0
+
+    trades.sortedWith(compareBy({ it.date }, { it.id })).forEach { trade ->
+        if (trade.type == InvestmentTxnType.SELL) {
+            // Selling units that aren't there is refused at entry; a historical row that slipped
+            // through is capped here so the cost basis can't go negative.
+            val sold = minOf(trade.quantity, quantity)
+            val averageCost = if (quantity > 0.0) costBasis / quantity else 0.0
+            realized += trade.amount - (sold * averageCost)
+            quantity -= sold
+            costBasis -= sold * averageCost
+        } else {
+            quantity += trade.quantity
+            costBasis += trade.amount
+        }
+    }
+
+    // Floating point leaves a whisper of quantity behind after a full exit; that isn't a holding.
+    if (quantity <= 1e-9) {
+        quantity = 0.0
+        costBasis = 0.0
+    }
+
+    val currentValue = quantity * investment.currentPrice
+    val unrealized = currentValue - costBasis
+    return InvestmentHolding(
+        investment = investment,
+        quantity = quantity,
+        avgBuyPrice = if (quantity > 0.0) costBasis / quantity else 0.0,
+        investedAmount = costBasis,
+        currentValue = currentValue,
+        gainLoss = unrealized,
+        gainLossPercent = if (costBasis > 0.0) (unrealized / costBasis) * 100 else 0.0,
+        realizedGain = realized,
+        // Either marker counts: the flag is what the log screen sets, the type is what an
+        // installment is, and a row carrying one without the other is still a SIP.
+        hasSip = trades.any { it.isSip || it.type == InvestmentTxnType.SIP_INSTALLMENT }
+    )
+}
 
 class FinanceViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -80,10 +149,24 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     private val _isRefreshingPrices = MutableStateFlow(false)
     val isRefreshingPrices: StateFlow<Boolean> = _isRefreshingPrices.asStateFlow()
 
-    // Spending for the CURRENT calendar month only (total + per category)
+    // Spending for the current pay cycle (total + per category), in the home currency.
     val monthlyExpenseTotal: StateFlow<Double>
     val monthlyIncomeTotal: StateFlow<Double>
     val monthlyCategorySpend: StateFlow<Map<Long, Double>>
+
+    /**
+     * Money held and money spent that is *not* in the home currency, keyed by currency code.
+     *
+     * The app has one currency and adds amounts together freely, which is only arithmetic while
+     * they all agree. A row carrying a different code — from a backup taken under another home
+     * currency, say — is reported here rather than folded into a total where ₹100,000 and $1,000
+     * would become 101,000 of nothing. Normally both are empty.
+     */
+    val foreignCurrencyBalances: StateFlow<Map<String, Double>>
+    val foreignCurrencySpend: StateFlow<Map<String, Double>>
+
+    /** Every account's balance, in the home currency only. See [foreignCurrencyBalances]. */
+    val totalBalance: StateFlow<Double>
 
     // Consecutive days (ending today or yesterday) with at least one logged transaction
     val streakDays: StateFlow<Int>
@@ -168,10 +251,23 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         _smsApprovalError.value = null
     }
 
+    /**
+     * Why an investment action was refused, or null once the caller has read it.
+     *
+     * Overselling and mistyped quantities used to be dropped on the floor — the sheet closed and
+     * nothing happened — or, worse, recorded as a negative holding.
+     */
+    private val _investmentError = MutableStateFlow<String?>(null)
+    val investmentError: StateFlow<String?> = _investmentError.asStateFlow()
+
+    fun clearInvestmentError() {
+        _investmentError.value = null
+    }
+
     init {
         FinancePreferences.init(application)
         val database = FinanceDatabase.getDatabase(application)
-        repository = FinanceRepository(database.financeDao())
+        repository = FinanceRepository(database.dao()) { FinancePreferences.currencyCodeFlow.value }
 
         accounts = repository.accounts.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         categories = repository.categories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -189,30 +285,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         investments = repository.investments.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         investmentTransactions = repository.investmentTransactions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         portfolioHoldings = combine(investments, investmentTransactions) { invs, txns ->
-            invs.map { inv ->
-                val invTxns = txns.filter { it.investmentId == inv.id }
-                val buys = invTxns.filter { it.type != InvestmentTxnType.SELL }
-                val sells = invTxns.filter { it.type == InvestmentTxnType.SELL }
-                val boughtQty = buys.sumOf { it.quantity }
-                val soldQty = sells.sumOf { it.quantity }
-                val netQty = boughtQty - soldQty
-                val avgBuyPrice = if (boughtQty > 0) buys.sumOf { it.amount } / boughtQty else 0.0
-                val investedAmount = netQty * avgBuyPrice
-                val currentValue = netQty * inv.currentPrice
-                val gainLoss = currentValue - investedAmount
-                val gainLossPercent = if (investedAmount > 0.0) (gainLoss / investedAmount) * 100 else 0.0
-                InvestmentHolding(
-                    investment = inv,
-                    quantity = netQty,
-                    avgBuyPrice = avgBuyPrice,
-                    investedAmount = investedAmount,
-                    currentValue = currentValue,
-                    gainLoss = gainLoss,
-                    gainLossPercent = gainLossPercent,
-                    hasSip = invTxns.any { it.isSip }
-                )
-            }
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+            val byInvestment = txns.groupBy { it.investmentId }
+            invs.map { inv -> computeHolding(inv, byInvestment[inv.id].orEmpty()) }
+        }.flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
         merchantRules = repository.merchantRules
             .map { rules -> rules.associateBy { it.merchantKey } }
@@ -267,30 +343,60 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             FinancePreferences.payCycleAnchorDayFlow.collect { _payCycleAnchorDay.value = it }
         }
 
-        monthlyExpenseTotal = transactions
-            .map { txList ->
-                val (start, end) = currentPayCycleRange()
-                txList.filter { it.type == TransactionType.EXPENSE && it.date in start..end }
-                    .sumOf { it.amount }
-            }
+        // Everything scoped to "this cycle" depends on three things, not one: the transactions,
+        // and the two settings that decide where the cycle starts. Mapping over the transactions
+        // alone meant changing payday frequency or anchor day left every budget number showing the
+        // old cycle's totals until some unrelated transaction happened to nudge the flow.
+        val payCycleScopedTransactions = combine(
+            transactions,
+            _payCycleFrequency,
+            _payCycleAnchorDay
+        ) { txList, _, _ ->
+            val (start, end) = currentPayCycleRange()
+            txList.filter { it.date in start..end }
+        }.flowOn(Dispatchers.Default)
+
+        monthlyExpenseTotal = payCycleScopedTransactions
+            .map { cycle -> homeCurrencyTotal(cycle) { it.type == TransactionType.EXPENSE } }
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
 
-        monthlyIncomeTotal = transactions
-            .map { txList ->
-                val (start, end) = currentPayCycleRange()
-                txList.filter { it.type == TransactionType.INCOME && it.date in start..end }
-                    .sumOf { it.amount }
-            }
+        monthlyIncomeTotal = payCycleScopedTransactions
+            .map { cycle -> homeCurrencyTotal(cycle) { it.type == TransactionType.INCOME } }
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
 
-        monthlyCategorySpend = transactions
-            .map { txList ->
-                val (start, end) = currentPayCycleRange()
-                txList.filter { it.type == TransactionType.EXPENSE && it.date in start..end }
+        monthlyCategorySpend = payCycleScopedTransactions
+            .map { cycle ->
+                cycle.filter { it.type == TransactionType.EXPENSE && isHomeCurrency(it.currency) }
                     .groupBy { it.categoryId }
                     .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+            }
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+        // Spending this cycle that is *not* in the home currency, per code. Adding it to the
+        // totals above would be adding rupees to dollars; showing it separately is the honest
+        // version, and an empty map (the normal case) costs the UI nothing.
+        foreignCurrencySpend = payCycleScopedTransactions
+            .map { cycle ->
+                cycle.filter { it.type == TransactionType.EXPENSE && !isHomeCurrency(it.currency) }
+                    .groupBy { it.currency }
+                    .mapValues { (_, txs) -> txs.sumOf { it.amount } }
+            }
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+
+        totalBalance = accounts
+            .map { list -> list.filter { isHomeCurrency(it.currency) }.sumOf { it.balance } }
+            .flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0.0)
+
+        foreignCurrencyBalances = accounts
+            .map { list ->
+                list.filterNot { isHomeCurrency(it.currency) }
+                    .groupBy { it.currency }
+                    .mapValues { (_, accs) -> accs.sumOf { it.balance } }
             }
             .flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
@@ -359,7 +465,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             val remainingGoals = goalsList.sumOf { (it.targetAmount - it.savedAmount).coerceAtLeast(0.0) }
             val upcomingBills = recList.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
             
-            // Just a rough estimate for Safe to Spend
+            // A rough guide, not a figure to bank on: it subtracts every envelope's *whole* limit
+            // rather than what is left in it, counts a tenth of the distance to each goal, and
+            // treats every recurring expense as still to come. The UI labels it an estimate for
+            // exactly that reason.
             val safe = totalBalance - remainingBudgets - (remainingGoals * 0.1) - upcomingBills
             if (safe < 0) 0.0 else safe
         }.flowOn(Dispatchers.Default)
@@ -450,6 +559,18 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             checkUpcomingBills()
         }
 
+        // Bring the stored currency codes in line with the home currency, once. Every amount has
+        // always been displayed in that currency regardless of what the column said, so this makes
+        // the data agree with the screens rather than changing what anything is worth — and it is
+        // what lets the totals above add rows together honestly.
+        viewModelScope.launch {
+            val home = FinancePreferences.currencyCodeFlow.value
+            if (FinancePreferences.currencyNormalizedFor() != home) {
+                repository.normalizeCurrencies(home)
+                FinancePreferences.setCurrencyNormalizedFor(home)
+            }
+        }
+
         // Establish an anonymous Supabase session for cloud sync
         viewModelScope.launch {
             _cloudUserId.value = SupabaseManager.ensureSignedIn()
@@ -467,7 +588,21 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
     fun setCurrency(code: String) {
         FinancePreferences.setCurrencyCode(code)
+        // The stored codes follow the setting, because the setting is what every amount is
+        // displayed in. Nothing is converted — this is a relabelling, not an exchange.
+        viewModelScope.launch {
+            repository.normalizeCurrencies(code)
+            FinancePreferences.setCurrencyNormalizedFor(code)
+        }
     }
+
+    /** Whether [code] is the currency the app is showing everything in. Blank counts as "yes". */
+    private fun isHomeCurrency(code: String): Boolean =
+        code.isBlank() || code.equals(_currencyCode.value, ignoreCase = true)
+
+    /** Sums the matching transactions, skipping any that aren't in the home currency. */
+    private fun homeCurrencyTotal(list: List<Transaction>, predicate: (Transaction) -> Boolean): Double =
+        list.filter { predicate(it) && isHomeCurrency(it.currency) }.sumOf { it.amount }
 
     fun setPayCycle(frequency: PayCycleFrequency, anchorDay: Int) {
         FinancePreferences.setPayCycle(frequency, anchorDay)
@@ -635,22 +770,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         if (amount <= 0) return
         viewModelScope.launch {
             val before = goal.savedAmount / goal.targetAmount
-            val updated = goal.copy(savedAmount = goal.savedAmount + amount)
-            repository.updateSavingsGoal(updated)
-
-            if (fromAccountId != null) {
-                // The transfer itself debits the account — the ledger handles that.
-                repository.insertTransaction(
-                    Transaction(
-                        amount = amount,
-                        type = TransactionType.TRANSFER,
-                        categoryId = 0L,
-                        sourceAccountId = fromAccountId,
-                        note = "Saved to goal: ${goal.name}",
-                        date = System.currentTimeMillis()
-                    )
-                )
-            }
+            // The goal and the account move together or not at all — see
+            // FinanceRepository.contributeToGoal.
+            val updated = repository.contributeToGoal(goal, amount, fromAccountId)
 
             // Milestone notifications (50% and 100%). A goal with no target has no fractions to
             // cross — the division would be NaN and every comparison below quietly false.
@@ -793,11 +915,20 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         date: Long,
         isSip: Boolean
     ) {
-        if (quantity <= 0.0 || pricePerUnit <= 0.0) return
+        if (quantity <= 0.0 || pricePerUnit <= 0.0) {
+            _investmentError.value = "Enter a quantity and a price above zero."
+            return
+        }
+        if (accountId <= 0L) {
+            _investmentError.value = "Pick the account this money came from."
+            return
+        }
         viewModelScope.launch {
-            val amount = quantity * pricePerUnit
-            repository.insertInvestmentTransaction(
-                InvestmentTransaction(
+            val amount = Money.roundToMinorUnit(quantity * pricePerUnit)
+            // The units and the cash they cost are written as one unit — see
+            // FinanceRepository.recordInvestmentTrade.
+            repository.recordInvestmentTrade(
+                trade = InvestmentTransaction(
                     investmentId = investment.id,
                     type = if (isSip) InvestmentTxnType.SIP_INSTALLMENT else InvestmentTxnType.BUY,
                     quantity = quantity,
@@ -806,14 +937,20 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     date = date,
                     sourceAccountId = accountId,
                     isSip = isSip
-                )
+                ),
+                cashDelta = -amount,
+                note = "Invested in ${investment.name}"
             )
-            // Money leaves the funding account to buy the units.
-            repository.postBalanceAdjustment(accountId, -amount, "Invested in ${investment.name}", date)
         }
     }
 
-    /** Records a sell and credits the sale proceeds back to the account via the ledger. */
+    /**
+     * Records a sell and credits the sale proceeds back to the account via the ledger.
+     *
+     * Selling more units than are held is refused rather than recorded: it would put the holding
+     * into negative quantity, which the portfolio would then price as a negative investment and
+     * credit the account for money that never arrived.
+     */
     fun recordInvestmentSell(
         investment: Investment,
         quantity: Double,
@@ -821,11 +958,25 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         accountId: Long,
         date: Long
     ) {
-        if (quantity <= 0.0 || pricePerUnit <= 0.0) return
+        if (quantity <= 0.0 || pricePerUnit <= 0.0) {
+            _investmentError.value = "Enter a quantity and a price above zero."
+            return
+        }
+        if (accountId <= 0L) {
+            _investmentError.value = "Pick the account the proceeds land in."
+            return
+        }
         viewModelScope.launch {
-            val amount = quantity * pricePerUnit
-            repository.insertInvestmentTransaction(
-                InvestmentTransaction(
+            val held = repository.heldQuantityOf(investment.id)
+            if (quantity > held + 1e-9) {
+                _investmentError.value =
+                    "You hold ${formatQuantity(held)} unit(s) of ${investment.name}; you can't sell " +
+                        "${formatQuantity(quantity)}."
+                return@launch
+            }
+            val amount = Money.roundToMinorUnit(quantity * pricePerUnit)
+            repository.recordInvestmentTrade(
+                trade = InvestmentTransaction(
                     investmentId = investment.id,
                     type = InvestmentTxnType.SELL,
                     quantity = quantity,
@@ -833,34 +984,65 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     amount = amount,
                     date = date,
                     sourceAccountId = accountId
-                )
+                ),
+                cashDelta = amount,
+                note = "Sold ${investment.name}"
             )
-            // Proceeds arrive in the account.
-            repository.postBalanceAdjustment(accountId, amount, "Sold ${investment.name}", date)
         }
     }
 
+    /**
+     * Edits a logged trade and corrects the funding account for the difference.
+     *
+     * Editing used to rewrite the holding row alone, leaving the account still showing the cash
+     * the original trade moved — so correcting a mistyped quantity produced a balance that was
+     * permanently wrong with nothing to point at.
+     */
     fun updateInvestmentTransaction(transaction: InvestmentTransaction) {
-        viewModelScope.launch { repository.updateInvestmentTransaction(transaction) }
+        viewModelScope.launch {
+            val existing = repository.getInvestmentTransactionById(transaction.id)
+            if (existing == null) {
+                _investmentError.value = "That trade is no longer on record."
+                return@launch
+            }
+            if (transaction.quantity <= 0.0 || transaction.pricePerUnit <= 0.0) {
+                _investmentError.value = "Enter a quantity and a price above zero."
+                return@launch
+            }
+            if (transaction.type == InvestmentTxnType.SELL) {
+                val held = repository.heldQuantityOf(transaction.investmentId, excludingTradeId = transaction.id)
+                if (transaction.quantity > held + 1e-9) {
+                    _investmentError.value =
+                        "Only ${formatQuantity(held)} unit(s) are held once this trade is set aside."
+                    return@launch
+                }
+            }
+            val investmentName = investments.value.firstOrNull { it.id == transaction.investmentId }?.name
+                ?: "investment"
+            val amount = Money.roundToMinorUnit(transaction.quantity * transaction.pricePerUnit)
+            repository.replaceInvestmentTrade(
+                old = existing,
+                updated = transaction.copy(amount = amount),
+                note = if (transaction.type == InvestmentTxnType.SELL) {
+                    "Sold $investmentName"
+                } else {
+                    "Invested in $investmentName"
+                }
+            )
+        }
     }
 
     /** Deletes a logged buy/sell/SIP row and reverses its ledger effect on the funding account. */
     fun deleteInvestmentTransaction(transaction: InvestmentTransaction) {
         viewModelScope.launch {
-            repository.deleteInvestmentTransaction(transaction)
-            // Undoing a sell takes the proceeds back out; undoing a buy returns the cash.
-            val reversal = when (transaction.type) {
-                InvestmentTxnType.SELL -> -transaction.amount
-                else -> transaction.amount
-            }
-            repository.postBalanceAdjustment(
-                transaction.sourceAccountId,
-                reversal,
-                "Reversed investment log",
-                System.currentTimeMillis()
-            )
+            repository.deleteInvestmentTrade(transaction, "Reversed investment log")
         }
     }
+
+    /** Units without a trailing `.0` on whole numbers, for the messages above. */
+    private fun formatQuantity(value: Double): String =
+        if (value % 1.0 == 0.0) value.toLong().toString()
+        else String.format(java.util.Locale.US, "%.4f", value).trimEnd('0').trimEnd('.')
 
     /** Refreshes cached prices for every holding that has a symbol. Failures keep the old price. */
     fun refreshAllPrices() {
@@ -2130,22 +2312,16 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         account: Account,
         date: Long
     ): Long {
-        val newPaidAmount = debt.paidAmount + paymentAmount
-        repository.updateDebt(
-            debt.copy(
-                paidAmount = newPaidAmount,
-                isSettled = newPaidAmount >= debt.amount
-            )
-        )
-
-        // Money in when they repay a loan you made, money out when you repay one you took.
-        val loggedId = repository.postBalanceAdjustment(
+        // Money in when they repay a loan you made, money out when you repay one you took. The
+        // debt row and the balance are written as one unit, so a process kill can no longer leave
+        // a repayment recorded that no account ever paid.
+        val loggedId = repository.applyDebtPayment(
+            debt = debt,
+            paymentAmount = paymentAmount,
             accountId = account.id,
             delta = if (debt.type == DebtType.LENT) paymentAmount else -paymentAmount,
-            note = "IOU Payment: ${debt.personName}",
             date = date
         )
-
         SyncWorker.enqueueNow(getApplication())
         return loggedId
     }

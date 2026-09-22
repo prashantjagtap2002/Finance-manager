@@ -29,7 +29,8 @@ FinanceManager combines elegant iOS-inspired minimalism with powerful envelope b
 ### 🔄 **Bidirectional Supabase Cloud Synchronization**
 - **Offline-First Architecture**: Powered by Room Database for fast, zero-latency local operations.
 - **Automatic Cloud Restoration**: The first sync on a new device pulls cloud data down before pushing anything up, so a reinstall recovers your real accounts and envelopes instead of keeping the seed ones.
-- **Two-Way Merge**: Every row carries a last-changed timestamp, so each sync compares the two sides per row: the newer copy wins, edits travel in both directions, and a row deleted here is deleted in the cloud instead of coming back on the next pull.
+- **Two-Way Merge**: Every row carries a last-changed timestamp, so each sync compares the two sides per row: the newer copy wins and edits travel in both directions.
+- **Deletions Are Recorded, Never Inferred**: Deleting something writes a local tombstone, and that record is the only thing that can remove a row from the cloud. A row the server has and this device does not is treated as one created elsewhere and pulled down — so a transaction entered on your second phone can never be deleted by your first one before it arrives.
 - **Your Messages Stay Put**: Only the parsed fields of a bank alert are synced. The original message text is never uploaded.
 - **Off Whenever You Want**: A switch in Settings stops sync entirely; nothing leaves the device while it is off.
 - **Silent Background Sync**: Background WorkManager execution with network error resilience and zero intrusive popups.
@@ -107,6 +108,11 @@ FinanceManager combines elegant iOS-inspired minimalism with powerful envelope b
    alter table sms_transactions add column if not exists resolution text default '';
    ```
 
+   Nothing has to be added for deletions. They are recorded in a local `deleted_records` table
+   and applied to the cloud as ordinary `DELETE`s, so the tombstones themselves never leave the
+   device — which also means a deletion made on one device reaches another only by way of the
+   cloud row disappearing, never by the second device guessing.
+
    **Row Level Security is not optional.** The key above ships inside the APK and can be read
    out of any copy of it, so it identifies the *app*, not the user. The only thing separating
    one user's rows from another's is a policy on the table. Without the SQL below, anyone who
@@ -152,6 +158,13 @@ FinanceManager combines elegant iOS-inspired minimalism with powerful envelope b
    select count(*) from transactions;  -- expect 0
    reset role;
    ```
+
+   **One currency, on purpose.** The home currency in Settings is what every amount in the app
+   is rendered in, and totals add rows together on the strength of that. The stored per-row
+   currency codes are re-stamped to match it once, which relabels rather than converts — no
+   amount is touched. A row that still carries a different code (a backup brought over from a
+   phone whose home currency was something else) is reported beside the total as its own figure
+   rather than added into it, because ₹100,000 + $1,000 is not 101,000 of anything.
 
    **What the backup covers.** Settings → Export Backup writes a JSON file holding every table
    the app owns: accounts, envelopes, transactions, recurring templates, goals, IOUs, investment

@@ -49,8 +49,6 @@ class MainActivity : FragmentActivity() {
     /** Set while the biometric sheet is up, so onStart doesn't stack a second prompt on it. */
     private var biometricPromptShowing = false
 
-    private val smsPermissionLauncher =
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* optional feature — no-op */ }
 
@@ -102,6 +100,9 @@ class MainActivity : FragmentActivity() {
         // too, not just a cold launch.
 
         val openQuickEntry = intent.getBooleanExtra("open_quick_entry", false)
+        // Read before setContent so the deferred block below can tell a first launch from any
+        // other one without racing the composition that decides it.
+        val showingOnboarding = !prefs.getBoolean("onboarding_done", false)
 
         setContent {
             val themeMode by FinancePreferences.themeModeFlow.collectAsStateWithLifecycle()
@@ -127,6 +128,9 @@ class MainActivity : FragmentActivity() {
                             onFinish = {
                                 prefs.edit().putBoolean("onboarding_done", true).apply()
                                 showOnboarding = false
+                                // Now, rather than over the onboarding flow: the user has just
+                                // been shown what the alerts are for.
+                                requestNotificationPermissionIfNeeded()
                             }
                         )
                         AppLock.isLocked -> AppLockScreen(
@@ -144,15 +148,23 @@ class MainActivity : FragmentActivity() {
 
         // None of this is needed to draw the first frame, and all of it touches disk: creating
         // notification channels, and spinning up WorkManager to write two rows to its own
-        // database. Running it inline was part of why the first frame arrived late. The permission
-        // sheets are deferred too — they read better over a drawn UI than over a blank window.
+        // database. Running it inline was part of why the first frame arrived late.
         lifecycleScope.launch {
             withContext(Dispatchers.Default) {
                 NotificationHelper.ensureChannels(this@MainActivity)
                 scheduleBackgroundWork()
             }
-            requestSmsPermissionIfNeeded()
-            requestNotificationPermissionIfNeeded()
+            // SMS access is deliberately NOT requested here any more. Reading someone's messages
+            // is the most invasive thing this app asks for, and asking seconds after first launch
+            // — before they have seen what the app is, let alone the SMS inbox — gives them
+            // nothing to answer with but "no". The SMS screen already carries a card explaining
+            // what the permission buys and a button to grant it, which is the same request with a
+            // reason attached; this one was only ever a second, worse copy of it.
+            //
+            // Notifications are asked for once, and only after onboarding: budget alerts and bill
+            // reminders are things the user has just been told about, so the prompt lands on a
+            // question they can answer.
+            if (!showingOnboarding) requestNotificationPermissionIfNeeded()
         }
     }
 
@@ -236,14 +248,6 @@ class MainActivity : FragmentActivity() {
                 != PackageManager.PERMISSION_GRANTED
         ) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
-
-    private fun requestSmsPermissionIfNeeded() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS)
         }
     }
 

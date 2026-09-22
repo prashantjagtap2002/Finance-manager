@@ -158,7 +158,7 @@ val Typography = Typography(
 // ============================================================================
 
 @Composable
-fun iOSTextStyle(
+fun iosTextStyle(
     variant: String = "body"
 ): TextStyle {
     return when (variant) {

@@ -3,7 +3,18 @@ package com.example.financemanager.domain
 import com.example.financemanager.data.*
 import kotlinx.coroutines.flow.Flow
 
-class FinanceRepository(private val dao: FinanceDao) {
+class FinanceRepository(
+    private val dao: FinanceDao,
+    /**
+     * The one currency the app works in, read fresh each time so a change in Settings is picked up
+     * without rebuilding anything.
+     *
+     * Passed in rather than read from `core.FinancePreferences` directly, which would be the only
+     * thing pulling the domain layer up into the app's preference storage. The default keeps the
+     * historical value for callers that have no preferences to consult — the unit tests.
+     */
+    private val homeCurrency: () -> String = { "INR" }
+) {
 
     /**
      * Rows go to the DAO carrying a fresh `updatedAt`, because everything that reaches the
@@ -14,6 +25,48 @@ class FinanceRepository(private val dao: FinanceDao) {
      */
     private fun now() = System.currentTimeMillis()
 
+    // --- Deletion records ---
+    // A cloud sync cannot tell "deleted here" from "created on another device and not pulled yet"
+    // by looking at what is missing, and guessing wrong in the deleting direction destroys data
+    // that was never on this device. So every delete the *user* asks for writes a tombstone, and
+    // the sync removes a cloud row only when one says to. See
+    // [com.example.financemanager.data.DeletedRecord].
+
+    /** Records that [rowId] of [table] was deleted here, so the next sync removes it in the cloud. */
+    private suspend fun tombstone(table: String, rowId: Long) {
+        if (rowId <= 0L) return
+        dao.insertDeletedRecord(DeletedRecord(tableName = table, rowId = rowId))
+    }
+
+    /**
+     * Forgets a tombstone because the row is back — an undo, or a restore that wrote the same id
+     * again. Left in place it would have the next sync delete the revived row from the cloud.
+     */
+    private suspend fun revive(table: String, rowId: Long) {
+        if (rowId <= 0L) return
+        dao.forgetDeletedRecord(table, rowId)
+    }
+
+    /** Row ids deleted on this device for [table]. Read by the sync, written by nothing else. */
+    suspend fun deletedRowIds(table: String): Set<Long> = dao.getDeletedRowIds(table).toSet()
+
+    /**
+     * Drops tombstones older than [retentionMillis].
+     *
+     * They exist to survive the gap between a delete and the next successful sync, not forever.
+     * The window is deliberately generous, and a tombstone that does expire only means a row could
+     * come back — which is the failure direction this whole mechanism exists to choose.
+     */
+    suspend fun pruneDeletionRecords(retentionMillis: Long) {
+        dao.pruneDeletedRecords(now() - retentionMillis)
+    }
+
+    /**
+     * Forgets every tombstone. Used after a bulk replacement (a backup restore), where the file is
+     * the statement of what exists and nothing in it should be treated as deleted.
+     */
+    suspend fun forgetAllDeletionRecords() = dao.clearDeletedRecords()
+
     // Accounts
     val accounts: Flow<List<Account>> = dao.getAccountsFlow()
     
@@ -21,18 +74,30 @@ class FinanceRepository(private val dao: FinanceDao) {
 
     suspend fun getAccountsOnce(): List<Account> = dao.getAccountsList()
 
-    suspend fun insertAccount(account: Account): Long = dao.insertAccount(account.copy(updatedAt = now()))
+    suspend fun insertAccount(account: Account): Long = dao.atomically {
+        val id = dao.insertAccount(account.copy(currency = homeCurrency(), updatedAt = now()))
+        // An id being written again is an id that is no longer deleted.
+        revive(SyncTables.ACCOUNTS, id)
+        id
+    }
     
     suspend fun updateAccount(account: Account) = dao.updateAccount(account.copy(updatedAt = now()))
     
-    suspend fun deleteAccount(account: Account) = dao.deleteAccount(account)
+    suspend fun deleteAccount(account: Account) = dao.atomically {
+        dao.deleteAccount(account)
+        tombstone(SyncTables.ACCOUNTS, account.id)
+    }
 
     // Categories (Envelopes)
     val categories: Flow<List<Category>> = dao.getCategoriesFlow()
     
     suspend fun getCategoryById(id: Long): Category? = dao.getCategoryById(id)
     
-    suspend fun insertCategory(category: Category): Long = dao.insertCategory(category.copy(updatedAt = now()))
+    suspend fun insertCategory(category: Category): Long = dao.atomically {
+        val id = dao.insertCategory(category.copy(updatedAt = now()))
+        revive(SyncTables.CATEGORIES, id)
+        id
+    }
     
     suspend fun updateCategory(category: Category) = dao.updateCategory(category.copy(updatedAt = now()))
     
@@ -48,7 +113,7 @@ class FinanceRepository(private val dao: FinanceDao) {
      * dangling id: they disappeared from every category breakdown while still counting toward the
      * expense total, so Insights silently stopped adding up.
      */
-    suspend fun deleteCategory(category: Category, reassignToCategoryId: Long) {
+    suspend fun deleteCategory(category: Category, reassignToCategoryId: Long) = dao.atomically {
         dao.reassignTransactionCategory(category.id, reassignToCategoryId)
         dao.reassignRecurringCategory(category.id, reassignToCategoryId)
         if (reassignToCategoryId > 0L) {
@@ -58,6 +123,7 @@ class FinanceRepository(private val dao: FinanceDao) {
             dao.deleteMerchantRulesForCategory(category.id)
         }
         dao.deleteCategory(category)
+        tombstone(SyncTables.CATEGORIES, category.id)
     }
 
     suspend fun getTransactionsForAccount(accountId: Long): List<Transaction> =
@@ -99,8 +165,8 @@ class FinanceRepository(private val dao: FinanceDao) {
      * rules move across, and the target absorbs both its balance and its opening balance, which
      * keeps `balance == openingBalance + transactions` true on the other side.
      */
-    suspend fun mergeAndDeleteAccount(account: Account, targetAccountId: Long) {
-        val target = dao.getAccountById(targetAccountId) ?: return
+    suspend fun mergeAndDeleteAccount(account: Account, targetAccountId: Long) = dao.atomically {
+        val target = dao.getAccountById(targetAccountId) ?: return@atomically
         dao.reassignTransactionSourceAccount(account.id, targetAccountId)
         dao.reassignTransactionDestinationAccount(account.id, targetAccountId)
         dao.reassignRecurringAccount(account.id, targetAccountId)
@@ -108,12 +174,13 @@ class FinanceRepository(private val dao: FinanceDao) {
         dao.reassignSmsAccount(account.id, targetAccountId)
         dao.updateAccount(
             target.copy(
-                balance = target.balance + account.balance,
-                openingBalance = target.openingBalance + account.openingBalance,
+                balance = Money.roundToMinorUnit(target.balance + account.balance),
+                openingBalance = Money.roundToMinorUnit(target.openingBalance + account.openingBalance),
                 updatedAt = now()
             )
         )
         dao.deleteAccount(account)
+        tombstone(SyncTables.ACCOUNTS, account.id)
     }
 
     /**
@@ -121,12 +188,16 @@ class FinanceRepository(private val dao: FinanceDao) {
      * that transfers give the money back to the account on the other side instead of leaving it
      * short.
      */
-    suspend fun deleteAccountWithTransactions(account: Account) {
-        dao.getTransactionsForAccount(account.id).forEach { AccountLedger.revoke(dao, it) }
+    suspend fun deleteAccountWithTransactions(account: Account) = dao.atomically {
+        dao.getTransactionsForAccount(account.id).forEach {
+            AccountLedger.revoke(dao, it)
+            tombstone(SyncTables.TRANSACTIONS, it.id)
+        }
         dao.reassignRecurringAccount(account.id, 0L)
         dao.reassignMerchantRuleAccount(account.id, 0L)
         dao.reassignSmsAccount(account.id, 0L)
         dao.deleteAccount(account)
+        tombstone(SyncTables.ACCOUNTS, account.id)
     }
 
     // Transactions
@@ -161,7 +232,18 @@ class FinanceRepository(private val dao: FinanceDao) {
      * Records a transaction and moves the affected account balances with it. Callers must not
      * adjust balances themselves — see [AccountLedger].
      */
-    suspend fun insertTransaction(transaction: Transaction): Long = AccountLedger.post(dao, transaction)
+    suspend fun insertTransaction(transaction: Transaction): Long = dao.atomically {
+        // Stamped with the home currency because this is the path the *user* creates rows on, and
+        // there is no way in the app to enter an amount in anything else. Restores come in through
+        // insertTransactionFromBackup and replaceBackupData, which leave the stored code alone —
+        // that is what lets a file brought over from another home currency stay recognisably
+        // foreign instead of being silently absorbed into the totals.
+        val id = AccountLedger.post(dao, transaction.copy(currency = homeCurrency()))
+        // Undo re-inserts a deleted row under its own id; without this the next sync would read
+        // the stale tombstone and delete the restored transaction out of the cloud.
+        revive(SyncTables.TRANSACTIONS, id)
+        id
+    }
 
     /**
      * Checks if a transaction with the same key fields already exists to prevent duplicates.
@@ -184,7 +266,10 @@ class FinanceRepository(private val dao: FinanceDao) {
         AccountLedger.amend(dao, oldTransaction, newTransaction)
     }
 
-    suspend fun deleteTransaction(transaction: Transaction) = AccountLedger.revoke(dao, transaction)
+    suspend fun deleteTransaction(transaction: Transaction) = dao.atomically {
+        AccountLedger.revoke(dao, transaction)
+        tombstone(SyncTables.TRANSACTIONS, transaction.id)
+    }
 
     /**
      * Writes a transaction verbatim without moving any balance. Only for bulk restores, where the
@@ -207,16 +292,19 @@ class FinanceRepository(private val dao: FinanceDao) {
     // Recurring Transactions
     val recurringTransactions: Flow<List<RecurringTransaction>> = dao.getRecurringTransactionsFlow()
     
-    suspend fun insertRecurringTransaction(recurringTransaction: RecurringTransaction): Long {
-        return dao.insertRecurringTransaction(recurringTransaction.copy(updatedAt = now()))
+    suspend fun insertRecurringTransaction(recurringTransaction: RecurringTransaction): Long = dao.atomically {
+        val id = dao.insertRecurringTransaction(recurringTransaction.copy(updatedAt = now()))
+        revive(SyncTables.RECURRING_TRANSACTIONS, id)
+        id
     }
     
     suspend fun updateRecurringTransaction(recurringTransaction: RecurringTransaction) {
         dao.updateRecurringTransaction(recurringTransaction.copy(updatedAt = now()))
     }
     
-    suspend fun deleteRecurringTransaction(recurringTransaction: RecurringTransaction) {
+    suspend fun deleteRecurringTransaction(recurringTransaction: RecurringTransaction) = dao.atomically {
         dao.deleteRecurringTransaction(recurringTransaction)
+        tombstone(SyncTables.RECURRING_TRANSACTIONS, recurringTransaction.id)
     }
     
     // Check and log recurring bills
@@ -233,11 +321,47 @@ class FinanceRepository(private val dao: FinanceDao) {
 
     suspend fun getSavingsGoalById(id: Long): SavingsGoal? = dao.getSavingsGoalById(id)
 
-    suspend fun insertSavingsGoal(goal: SavingsGoal): Long = dao.insertSavingsGoal(goal.copy(updatedAt = now()))
+    suspend fun insertSavingsGoal(goal: SavingsGoal): Long = dao.atomically {
+        val id = dao.insertSavingsGoal(goal.copy(updatedAt = now()))
+        revive(SyncTables.SAVINGS_GOALS, id)
+        id
+    }
 
     suspend fun updateSavingsGoal(goal: SavingsGoal) = dao.updateSavingsGoal(goal.copy(updatedAt = now()))
 
-    suspend fun deleteSavingsGoal(goal: SavingsGoal) = dao.deleteSavingsGoal(goal)
+    /**
+     * Moves [amount] into [goal], optionally taking it out of an account, as one unit.
+     *
+     * The goal's saved amount and the account's balance are two halves of one statement. Written
+     * separately, a process death between them leaves the goal claiming money the account was
+     * never asked for — and nothing afterwards can tell that apart from a contribution the user
+     * made from cash. Returns the goal as it now stands so the caller can work out which
+     * milestones were crossed.
+     */
+    suspend fun contributeToGoal(goal: SavingsGoal, amount: Double, fromAccountId: Long?): SavingsGoal =
+        dao.atomically {
+            val updated = goal.copy(savedAmount = Money.roundToMinorUnit(goal.savedAmount + amount))
+            dao.updateSavingsGoal(updated.copy(updatedAt = now()))
+            if (fromAccountId != null) {
+                // The transfer itself debits the account — the ledger handles that.
+                insertTransaction(
+                    Transaction(
+                        amount = amount,
+                        type = TransactionType.TRANSFER,
+                        categoryId = 0L,
+                        sourceAccountId = fromAccountId,
+                        note = "Saved to goal: ${goal.name}",
+                        date = now()
+                    )
+                )
+            }
+            updated
+        }
+
+    suspend fun deleteSavingsGoal(goal: SavingsGoal) = dao.atomically {
+        dao.deleteSavingsGoal(goal)
+        tombstone(SyncTables.SAVINGS_GOALS, goal.id)
+    }
 
     /** Empties every table the app owns. "All" has to mean all — a leftover holding would
      *  reappear against accounts that no longer exist. */
@@ -264,19 +388,72 @@ class FinanceRepository(private val dao: FinanceDao) {
         groups: List<ExpenseGroup> = emptyList(),
         groupMembers: List<ExpenseGroupMember> = emptyList(),
         groupExpenses: List<ExpenseGroupExpense> = emptyList()
-    ) = dao.replaceBackupData(
-        accounts, categories, transactions, recurring, goals, debts,
-        investments, investmentTransactions, merchantRules, groups, groupMembers, groupExpenses
-    )
+    ) = dao.atomically {
+        dao.replaceBackupData(
+            accounts, categories, transactions, recurring, goals, debts,
+            investments, investmentTransactions, merchantRules, groups, groupMembers, groupExpenses
+        )
+        // A restore is a statement of what exists, not of what was deleted. Any tombstone left
+        // over would have the next sync delete a row the file just put back.
+        dao.clearDeletedRecords()
+    }
+
+    /**
+     * Re-stamps every stored currency code to [code], the user's home currency.
+     *
+     * The app has one currency: it is a single setting, every amount on screen is rendered with
+     * its symbol, and no screen has ever offered a per-account or per-transaction choice. The
+     * per-row `currency` columns were therefore always the hardcoded default, meaning nothing,
+     * while totals added the numbers together as if they agreed — which is only valid if they
+     * actually do. Making the code match what the app has always displayed is what makes those
+     * sums honest; not one amount is touched.
+     *
+     * Rows that arrive from elsewhere carrying a different code — a backup taken under another
+     * home currency — are left to [com.example.financemanager.ui.viewmodel.FinanceViewModel]'s
+     * per-currency totals to report separately rather than being silently absorbed. Returns how
+     * many rows were re-stamped.
+     */
+    suspend fun normalizeCurrencies(code: String): Int = dao.atomically {
+        val stamp = now()
+        dao.normalizeAccountCurrency(code, stamp) + dao.normalizeTransactionCurrency(code, stamp)
+    }
 
     // Debts
     val debts: Flow<List<Debt>> = dao.getDebtsFlow()
 
-    suspend fun insertDebt(debt: Debt): Long = dao.insertDebt(debt.copy(updatedAt = now()))
+    suspend fun insertDebt(debt: Debt): Long = dao.atomically {
+        val id = dao.insertDebt(debt.copy(updatedAt = now()))
+        revive(SyncTables.DEBTS, id)
+        id
+    }
 
     suspend fun updateDebt(debt: Debt) = dao.updateDebt(debt.copy(updatedAt = now()))
 
-    suspend fun deleteDebt(debt: Debt) = dao.deleteDebt(debt)
+    /**
+     * Records a repayment against [debt] and moves the account with it, as one unit. Returns the
+     * id of the ledger row so a caller that may have to undo the whole thing can hold on to it.
+     *
+     * [delta] is how the account's balance should move: positive when they repay a loan you made,
+     * negative when you repay one you took. Split across two writes, a crash between them left a
+     * debt marked part-paid with no money having moved, or the reverse.
+     */
+    suspend fun applyDebtPayment(debt: Debt, paymentAmount: Double, accountId: Long, delta: Double, date: Long): Long =
+        dao.atomically {
+            val newPaidAmount = Money.roundToMinorUnit(debt.paidAmount + paymentAmount)
+            dao.updateDebt(
+                debt.copy(
+                    paidAmount = newPaidAmount,
+                    isSettled = newPaidAmount >= debt.amount - Money.EPSILON,
+                    updatedAt = now()
+                )
+            )
+            postBalanceAdjustment(accountId, delta, "IOU Payment: ${debt.personName}", date)
+        }
+
+    suspend fun deleteDebt(debt: Debt) = dao.atomically {
+        dao.deleteDebt(debt)
+        tombstone(SyncTables.DEBTS, debt.id)
+    }
 
     // Group expenses
     val expenseGroups: Flow<List<ExpenseGroup>> = dao.getExpenseGroupsFlow()
@@ -334,13 +511,19 @@ class FinanceRepository(private val dao: FinanceDao) {
         )
     }
 
-    suspend fun insertSmsTransaction(smsTransaction: SmsTransaction): Long =
-        dao.insertSmsTransaction(smsTransaction.copy(updatedAt = now()))
+    suspend fun insertSmsTransaction(smsTransaction: SmsTransaction): Long = dao.atomically {
+        val id = dao.insertSmsTransaction(smsTransaction.copy(updatedAt = now()))
+        revive(SyncTables.SMS_TRANSACTIONS, id)
+        id
+    }
 
     suspend fun updateSmsTransaction(smsTransaction: SmsTransaction) =
         dao.updateSmsTransaction(smsTransaction.copy(updatedAt = now()))
 
-    suspend fun deleteSmsTransaction(smsTransaction: SmsTransaction) = dao.deleteSmsTransaction(smsTransaction)
+    suspend fun deleteSmsTransaction(smsTransaction: SmsTransaction) = dao.atomically {
+        dao.deleteSmsTransaction(smsTransaction)
+        tombstone(SyncTables.SMS_TRANSACTIONS, smsTransaction.id)
+    }
 
     /**
      * Removes the transaction an approved SMS created and gives its balance effect back.
@@ -366,7 +549,10 @@ class FinanceRepository(private val dao: FinanceDao) {
                 sms.rawTimestamp
             )
         }
-        logged?.let { AccountLedger.revoke(dao, it) }
+        logged?.let {
+            AccountLedger.revoke(dao, it)
+            tombstone(SyncTables.TRANSACTIONS, it.id)
+        }
     }
 
     // Merchant → category rules
@@ -414,14 +600,91 @@ class FinanceRepository(private val dao: FinanceDao) {
     suspend fun insertInvestmentTransaction(transaction: InvestmentTransaction): Long =
         dao.insertInvestmentTransaction(transaction)
 
-    suspend fun updateInvestmentTransaction(transaction: InvestmentTransaction) =
-        dao.updateInvestmentTransaction(transaction)
+    suspend fun getInvestmentTransactionById(id: Long): InvestmentTransaction? =
+        dao.getInvestmentTransactionById(id)
 
-    suspend fun deleteInvestmentTransaction(transaction: InvestmentTransaction) =
-        dao.deleteInvestmentTransaction(transaction)
+    /** One holding's trades, oldest first — the order cost basis has to be walked in. */
+    suspend fun getInvestmentTradesOnce(investmentId: Long): List<InvestmentTransaction> =
+        dao.getInvestmentTransactionsFor(investmentId)
 
-    /** Deletes a holding along with every buy/sell/SIP installment logged against it. */
-    suspend fun deleteInvestment(investment: Investment) {
+    /**
+     * Units of [investmentId] currently held, optionally ignoring one trade — which is what an
+     * edit needs, since the row being changed must not count against its own replacement.
+     */
+    suspend fun heldQuantityOf(investmentId: Long, excludingTradeId: Long = 0L): Double =
+        dao.getInvestmentTransactionsFor(investmentId)
+            .filter { it.id != excludingTradeId }
+            .sumOf { if (it.type == InvestmentTxnType.SELL) -it.quantity else it.quantity }
+
+    /**
+     * Records a buy or a sell together with the cash that moved, as one unit.
+     *
+     * The holding row and the account balance were two independent writes, so a crash between them
+     * left units owned that were never paid for, or cash gone with nothing bought. The ledger row
+     * id is kept on the trade ([InvestmentTransaction.ledgerTransactionId]) so editing or deleting
+     * the trade later can undo the exact movement it made instead of guessing at one.
+     *
+     * [cashDelta] is how the funding account moves: negative for a buy, positive for a sell.
+     */
+    suspend fun recordInvestmentTrade(
+        trade: InvestmentTransaction,
+        cashDelta: Double,
+        note: String
+    ): Long = dao.atomically {
+        val ledgerId = postBalanceAdjustment(trade.sourceAccountId, cashDelta, note, trade.date)
+        dao.insertInvestmentTransaction(trade.copy(ledgerTransactionId = ledgerId))
+    }
+
+    /**
+     * Replaces a logged trade, correcting the funding account for the difference.
+     *
+     * Editing used to rewrite the holding row alone, so changing a buy from 10 units to 100 left
+     * the account still showing the original ten units' worth of cash gone — a silent, permanent
+     * disagreement between the portfolio and the balance.
+     */
+    suspend fun replaceInvestmentTrade(
+        old: InvestmentTransaction,
+        updated: InvestmentTransaction,
+        note: String
+    ) = dao.atomically {
+        revokeTradeCash(old, "Reversed: $note")
+        val cashDelta = if (updated.type == InvestmentTxnType.SELL) updated.amount else -updated.amount
+        val newLedgerId = postBalanceAdjustment(updated.sourceAccountId, cashDelta, note, updated.date)
+        // A legacy row that had no ledger link gets one from here on.
+        dao.updateInvestmentTransaction(updated.copy(ledgerTransactionId = newLedgerId))
+    }
+
+    /** Deletes a logged trade and gives the funding account its money back, as one unit. */
+    suspend fun deleteInvestmentTrade(trade: InvestmentTransaction, note: String) = dao.atomically {
+        revokeTradeCash(trade, note)
+        dao.deleteInvestmentTransaction(trade)
+    }
+
+    /**
+     * Backs out the cash leg of [trade]. When the trade recorded which ledger row it created, that
+     * exact row is revoked; older trades that predate the link get an offsetting adjustment
+     * instead, which lands on the same balance but leaves both rows in the history.
+     */
+    private suspend fun revokeTradeCash(trade: InvestmentTransaction, note: String): Long {
+        val linked = trade.ledgerTransactionId.takeIf { it > 0L }?.let { dao.getTransactionById(it) }
+        if (linked != null) {
+            AccountLedger.revoke(dao, linked)
+            tombstone(SyncTables.TRANSACTIONS, linked.id)
+            return 0L
+        }
+        // Undoing a sell takes the proceeds back out; undoing a buy returns the cash.
+        val reversal = if (trade.type == InvestmentTxnType.SELL) -trade.amount else trade.amount
+        return postBalanceAdjustment(trade.sourceAccountId, reversal, note, now())
+    }
+
+    /**
+     * Deletes a holding along with every buy/sell/SIP installment logged against it.
+     *
+     * The cash legs those trades posted are deliberately left in the ledger: that money really did
+     * leave and arrive, the account balances are built on it, and removing the record of a holding
+     * is not a claim that its purchases never happened.
+     */
+    suspend fun deleteInvestment(investment: Investment) = dao.atomically {
         dao.deleteInvestmentTransactionsFor(investment.id)
         dao.deleteInvestment(investment)
     }

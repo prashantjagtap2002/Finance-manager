@@ -43,10 +43,10 @@ import kotlinx.coroutines.delay
 import com.example.financemanager.data.SavingsGoal
 import com.example.financemanager.theme.*
 import com.example.financemanager.theme.GoldAccent
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSCardStyle
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosCardStyle
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import java.text.SimpleDateFormat
@@ -119,7 +119,7 @@ fun GoalsScreen(
             // Summary card
             if (goals.isNotEmpty()) {
                 item {
-                    iOSCard(modifier = Modifier.fillMaxWidth(), style = iOSCardStyle.Grouped) {
+                    IosCard(modifier = Modifier.fillMaxWidth(), style = IosCardStyle.Grouped) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -181,9 +181,9 @@ fun GoalsScreen(
                             textAlign = TextAlign.Center
                         )
                         Spacer(modifier = Modifier.height(24.dp))
-                        iOSButton(
+                        IosButton(
                             onClick = { showAddDialog = true },
-                            variant = iOSButtonVariant.Accent,
+                            variant = IosButtonVariant.Accent,
                             accentColor = AccentGreen,
                             modifier = Modifier.clip(RoundedCornerShape(12.dp))
                         ) {
@@ -251,12 +251,12 @@ fun GoalsScreen(
                 )
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         viewModel.deleteSavingsGoal(goal)
                         deletingGoal = null
                     },
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = AlertRed
                 ) { Text("Delete") }
             },
@@ -354,9 +354,9 @@ private fun GoalCard(
         modifier.fillMaxWidth()
     }
 
-    iOSCard(
+    IosCard(
         modifier = cardModifier.clickable(enabled = isComplete, onClick = onCelebrate),
-        style = iOSCardStyle.Grouped
+        style = IosCardStyle.Grouped
     ) {
         Column(modifier = Modifier.padding(18.dp)) {
             Row(
@@ -414,11 +414,11 @@ private fun GoalCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                iOSButton(
+                IosButton(
                     onClick = onContribute,
                     enabled = !isComplete,
                     modifier = Modifier.weight(1f).height(42.dp).clip(RoundedCornerShape(10.dp)),
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = color.copy(alpha = 0.18f)
                 ) {
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -570,7 +570,7 @@ private fun AddGoalDialog(
             }
         },
         confirmButton = {
-            iOSButton(
+            IosButton(
                 onClick = {
                     val target = targetStr.toDoubleOrNull() ?: 0.0
                     if (name.isNotBlank() && target > 0) {
@@ -578,7 +578,7 @@ private fun AddGoalDialog(
                     }
                 },
                 enabled = name.isNotBlank() && (targetStr.toDoubleOrNull() ?: 0.0) > 0,
-                variant = iOSButtonVariant.Accent,
+                variant = IosButtonVariant.Accent,
                 accentColor = AccentGreen
             ) { Text("Create", fontWeight = FontWeight.Bold) }
         },
@@ -657,13 +657,13 @@ private fun ContributeDialog(
             }
         },
         confirmButton = {
-            iOSButton(
+            IosButton(
                 onClick = {
                     val amount = amountStr.toDoubleOrNull() ?: 0.0
                     if (amount > 0) onConfirm(amount, selectedAccountId)
                 },
                 enabled = (amountStr.toDoubleOrNull() ?: 0.0) > 0,
-                variant = iOSButtonVariant.Accent,
+                variant = IosButtonVariant.Accent,
                 accentColor = AccentGreen
             ) { Text("Add", fontWeight = FontWeight.Bold) }
         },

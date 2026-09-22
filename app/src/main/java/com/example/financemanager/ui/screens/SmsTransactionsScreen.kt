@@ -49,9 +49,9 @@ import com.example.financemanager.domain.SmsLink
 import com.example.financemanager.domain.SmsLinkKind
 import com.example.financemanager.theme.*
 import com.example.financemanager.ui.components.EmptyState
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
-import com.example.financemanager.ui.components.iOSCard
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import com.example.financemanager.domain.SmsAmountFormatter
@@ -479,9 +479,9 @@ private fun EmptySmsState(
                 modifier = Modifier.padding(horizontal = 32.dp)
             )
             Spacer(modifier = Modifier.height(20.dp))
-            iOSButton(
+            IosButton(
                 onClick = onImport,
-                variant = iOSButtonVariant.Accent, accentColor = SecondaryTeal
+                variant = IosButtonVariant.Accent, accentColor = SecondaryTeal
             ) {
                 Icon(Icons.Default.FileUpload, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
@@ -529,7 +529,7 @@ private fun SummaryChip(
     count: Int,
     color: Color
 ) {
-    iOSCard(modifier = modifier) {
+    IosCard(modifier = modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -586,7 +586,7 @@ private fun SmsTransactionCard(
     }
     val bankInitial = tx.accountName.firstOrNull()?.uppercaseChar() ?: '?'
 
-    iOSCard(modifier = Modifier.fillMaxWidth()) {
+    IosCard(modifier = Modifier.fillMaxWidth()) {
         Column {
             Row(
                 modifier = Modifier
@@ -759,9 +759,9 @@ private fun SmsTransactionCard(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Delete", color = AlertRed, fontSize = 13.sp)
                             }
-                            iOSButton(
+                            IosButton(
                                 onClick = onRestore,
-                                variant = iOSButtonVariant.Accent, accentColor = SecondaryTeal
+                                variant = IosButtonVariant.Accent, accentColor = SecondaryTeal
                             ) {
                                 Icon(
                                     Icons.Default.Restore,
@@ -798,9 +798,9 @@ private fun SmsTransactionCard(
                                 Spacer(modifier = Modifier.width(4.dp))
                                 Text("Ignore", fontSize = 12.sp)
                             }
-                            iOSButton(
+                            IosButton(
                                 onClick = onApprove,
-                                variant = iOSButtonVariant.Accent, accentColor = AccentGreen
+                                variant = IosButtonVariant.Accent, accentColor = AccentGreen
                             ) {
                                 Icon(
                                     Icons.Default.Check,
@@ -824,7 +824,7 @@ private fun SmsTransactionCard(
 private fun SmsPermissionCard(
     onGrant: () -> Unit
 ) {
-    iOSCard(modifier = Modifier.fillMaxWidth()) {
+    IosCard(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -849,9 +849,9 @@ private fun SmsPermissionCard(
                     )
                 }
             }
-            iOSButton(
+            IosButton(
                 onClick = onGrant,
-                variant = iOSButtonVariant.Accent, accentColor = SecondaryTeal
+                variant = IosButtonVariant.Accent, accentColor = SecondaryTeal
             ) {
                 Text("Grant")
             }
@@ -1498,7 +1498,7 @@ private fun ApproveSmsDialog(
                             )
                         }
                     }
-                    iOSButton(
+                    IosButton(
                         onClick = {
                             validationError = null
                             if (mode == 1) {
@@ -1538,7 +1538,7 @@ private fun ApproveSmsDialog(
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        variant = iOSButtonVariant.Accent, accentColor = actionColor
+                        variant = IosButtonVariant.Accent, accentColor = actionColor
                     ) {
                         Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(6.dp))
@@ -1593,7 +1593,7 @@ private fun SmsLinkCard(
     // Only worth warning about when there is something to undo.
     val alreadyLogged = link.debit.isApproved || link.credit.isApproved
 
-    iOSCard(modifier = Modifier.fillMaxWidth()) {
+    IosCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -1655,10 +1655,10 @@ private fun SmsLinkCard(
 
             Spacer(modifier = Modifier.height(12.dp))
 
-            iOSButton(
+            IosButton(
                 onClick = if (isReversal) onCancelOut else onLogAsTransfer,
                 modifier = Modifier.fillMaxWidth(),
-                variant = iOSButtonVariant.Accent,
+                variant = IosButtonVariant.Accent,
                 accentColor = accent
             ) {
                 Icon(
@@ -1859,10 +1859,10 @@ private fun LogTransferDialog(
                 }
 
                 Column {
-                    iOSButton(
+                    IosButton(
                         onClick = { if (isValid) onConfirm(fromAccountId, toAccountId, note) },
                         modifier = Modifier.fillMaxWidth(),
-                        variant = iOSButtonVariant.Accent,
+                        variant = IosButtonVariant.Accent,
                         accentColor = SecondaryTeal
                     ) {
                         Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))

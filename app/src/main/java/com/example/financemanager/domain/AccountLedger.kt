@@ -31,7 +31,7 @@ data class BalanceDrift(
 object AccountLedger {
 
     /** Rounding slack — anything smaller is floating-point noise, not real drift. */
-    private const val EPSILON = 0.005
+    private const val EPSILON = Money.EPSILON
 
     /**
      * Marks a row as changed now, for the cloud merge to compare against the server's copy. The
@@ -48,11 +48,18 @@ object AccountLedger {
         TransactionType.EXPENSE, TransactionType.TRANSFER -> -transaction.amount
     }
 
-    /** Writes the transaction and applies it to the balances. Returns the new row id. */
-    suspend fun post(dao: LedgerStore, transaction: Transaction): Long {
+    /**
+     * Writes the transaction and applies it to the balances. Returns the new row id.
+     *
+     * The two writes are one database transaction: a crash between them would otherwise leave a
+     * logged expense whose money never left the account, and nothing downstream can tell that
+     * apart from real drift — [reconcile] would "repair" the balance to include spending that was
+     * never meant to be there.
+     */
+    suspend fun post(dao: LedgerStore, transaction: Transaction): Long = dao.atomically {
         val id = dao.insertTransaction(transaction.touched())
         applyBalances(dao, transaction, +1)
-        return id
+        id
     }
 
     /**
@@ -60,7 +67,7 @@ object AccountLedger {
      * and critically does *not* touch balances in that case — the previous duplicate-safe insert
      * adjusted the balance either way, so a re-delivered SMS or a repeated sync double-charged.
      */
-    suspend fun postIfNew(dao: LedgerStore, transaction: Transaction): Long {
+    suspend fun postIfNew(dao: LedgerStore, transaction: Transaction): Long = dao.atomically {
         val existing = dao.findDuplicateTransaction(
             transaction.amount,
             transaction.type.name,
@@ -68,12 +75,13 @@ object AccountLedger {
             transaction.sourceAccountId,
             transaction.date
         )
-        if (existing != null) return existing.id
-        return post(dao, transaction)
+        // The check and the insert share the transaction, so two SMS deliveries racing each other
+        // can no longer both find nothing and both post.
+        if (existing != null) existing.id else post(dao, transaction)
     }
 
-    /** Removes the transaction and backs its effect out of the balances. */
-    suspend fun revoke(dao: LedgerStore, transaction: Transaction) {
+    /** Removes the transaction and backs its effect out of the balances, as one unit. */
+    suspend fun revoke(dao: LedgerStore, transaction: Transaction) = dao.atomically {
         dao.deleteTransaction(transaction)
         applyBalances(dao, transaction, -1)
     }
@@ -82,7 +90,7 @@ object AccountLedger {
      * Replaces [old] with [new], backing out the old effect before applying the new one. Handles
      * the amount, the type and the account all changing at once.
      */
-    suspend fun amend(dao: LedgerStore, old: Transaction, new: Transaction) {
+    suspend fun amend(dao: LedgerStore, old: Transaction, new: Transaction) = dao.atomically {
         applyBalances(dao, old, -1)
         dao.updateTransaction(new.touched())
         applyBalances(dao, new, +1)
@@ -136,15 +144,17 @@ object AccountLedger {
         // other account (as the old delete path did, falling back to "the first account") is worse
         // than leaving it alone.
         dao.getAccountById(transaction.sourceAccountId)?.let { account ->
-            dao.updateAccount(account.copy(balance = account.balance + sign * sourceDelta(transaction)).touched())
+            // Rounded on the way in: see Money. Without it a balance drifts a fraction of a paise
+            // further from the sum of its transactions with every edit.
+            val moved = Money.roundToMinorUnit(account.balance + sign * sourceDelta(transaction))
+            dao.updateAccount(account.copy(balance = moved).touched())
         }
 
         if (transaction.type == TransactionType.TRANSFER) {
             transaction.destinationAccountId?.let { destinationId ->
                 dao.getAccountById(destinationId)?.let { destination ->
-                    dao.updateAccount(
-                        destination.copy(balance = destination.balance + sign * transaction.amount).touched()
-                    )
+                    val moved = Money.roundToMinorUnit(destination.balance + sign * transaction.amount)
+                    dao.updateAccount(destination.copy(balance = moved).touched())
                 }
             }
         }
@@ -152,9 +162,11 @@ object AccountLedger {
 
     /** What [account]'s balance should be, derived from its opening balance and its transactions. */
     suspend fun ledgerBalanceOf(dao: LedgerStore, account: Account): Double =
-        account.openingBalance +
-            dao.sumSourceEffect(account.id) +
-            dao.sumIncomingTransfers(account.id)
+        Money.roundToMinorUnit(
+            account.openingBalance +
+                dao.sumSourceEffect(account.id) +
+                dao.sumIncomingTransfers(account.id)
+        )
 
     /**
      * Recomputes every balance from the ledger and writes back any that had drifted, returning
@@ -165,7 +177,7 @@ object AccountLedger {
      * the server did *not* overwrite still has to absorb the transactions the same sync pulled in,
      * and it is the only side of the ledger that can be trusted to say what its balance should be.
      */
-    suspend fun reconcile(dao: LedgerStore, onlyAccountIds: Set<Long>? = null): List<BalanceDrift> {
+    suspend fun reconcile(dao: LedgerStore, onlyAccountIds: Set<Long>? = null): List<BalanceDrift> = dao.atomically {
         val drifts = mutableListOf<BalanceDrift>()
         dao.getAccountsList().filter { onlyAccountIds == null || it.id in onlyAccountIds }.forEach { account ->
             val expected = ledgerBalanceOf(dao, account)
@@ -174,7 +186,7 @@ object AccountLedger {
                 dao.updateAccount(account.copy(balance = expected).touched())
             }
         }
-        return drifts
+        drifts
     }
 
     /**
@@ -186,10 +198,10 @@ object AccountLedger {
      * from the server, because those balances are authoritative; applying it to an account the
      * server did not send would bend its anchor to hide real drift instead of repairing it.
      */
-    suspend fun rebaseOpeningBalances(dao: LedgerStore, onlyAccountIds: Set<Long>? = null) {
+    suspend fun rebaseOpeningBalances(dao: LedgerStore, onlyAccountIds: Set<Long>? = null) = dao.atomically {
         dao.getAccountsList().filter { onlyAccountIds == null || it.id in onlyAccountIds }.forEach { account ->
             val fromTransactions = dao.sumSourceEffect(account.id) + dao.sumIncomingTransfers(account.id)
-            val rebased = account.balance - fromTransactions
+            val rebased = Money.roundToMinorUnit(account.balance - fromTransactions)
             // Only write when the anchor actually moves. This runs after every pull, and writing
             // unconditionally would restamp every account on every sync — making each one look
             // freshly edited, so a genuine edit from the server could never win the comparison.

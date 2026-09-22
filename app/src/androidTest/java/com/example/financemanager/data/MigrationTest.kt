@@ -174,7 +174,11 @@ class MigrationTest {
             InstrumentationRegistry.getInstrumentation().targetContext,
             FinanceDatabase::class.java,
             dbName
-        ).addMigrations(FinanceDatabase.MIGRATION_18_19, FinanceDatabase.MIGRATION_19_20).build()
+        ).addMigrations(
+            FinanceDatabase.MIGRATION_18_19,
+            FinanceDatabase.MIGRATION_19_20,
+            FinanceDatabase.MIGRATION_20_21
+        ).build()
 
         db.openHelper.writableDatabase.query("SELECT name, budgetLimit, updatedAt FROM categories").use { c ->
             assertEquals(1, c.count)
@@ -206,7 +210,8 @@ class MigrationTest {
         ).addMigrations(
             FinanceDatabase.MIGRATION_17_18,
             FinanceDatabase.MIGRATION_18_19,
-            FinanceDatabase.MIGRATION_19_20
+            FinanceDatabase.MIGRATION_19_20,
+            FinanceDatabase.MIGRATION_20_21
         ).build()
 
         db.openHelper.writableDatabase.query("SELECT name, budgetLimit FROM categories").use { c ->
@@ -285,6 +290,71 @@ class MigrationTest {
         db.query("SELECT id FROM savings_goals").use { c ->
             c.moveToFirst()
             assertTrue("an empty table must be banded too", c.getLong(0) > bandFloor)
+        }
+
+        db.close()
+    }
+
+    /**
+     * 20 -> 21 adds the deletion-record table and the investment trade's ledger link.
+     *
+     * The table has to arrive *empty*. A tombstone is an instruction to delete a row from the
+     * cloud, so inventing any here would have the first sync after upgrading delete data the user
+     * never asked it to. Existing trades must likewise come through with `ledgerTransactionId` at
+     * 0, which is what the repository reads as "this trade predates the link".
+     */
+    @Test
+    fun migrate20To21_addsTombstonesEmptyAndLinksTrades() {
+        helper.createDatabase(dbName, 20).apply {
+            execSQL(
+                "INSERT INTO investments (id, name, symbol, exchange, type, currentPrice, " +
+                    "lastPriceUpdate, currency, notes) " +
+                    "VALUES (1, 'TCS', 'TCS', 'NSE', 'STOCK', 3900.0, 0, 'INR', '')"
+            )
+            execSQL(
+                "INSERT INTO investment_transactions (id, investmentId, type, quantity, " +
+                    "pricePerUnit, amount, date, sourceAccountId, isSip) " +
+                    "VALUES (1, 1, 'BUY', 10.0, 3500.0, 35000.0, 1757784000000, 1, 0)"
+            )
+            execSQL(
+                "INSERT INTO accounts (id, name, type, balance, currency, openingBalance, updatedAt) " +
+                    "VALUES (1, 'Kotak Bank', 'BANK', 15000.0, 'INR', 15000.0, 1757784000000)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(
+            dbName,
+            21,
+            true,
+            FinanceDatabase.MIGRATION_20_21
+        )
+
+        db.query("SELECT COUNT(*) FROM deleted_records").use { c ->
+            c.moveToFirst()
+            assertEquals("an upgrade must not invent deletions", 0, c.getInt(0))
+        }
+
+        db.query("SELECT quantity, amount, ledgerTransactionId FROM investment_transactions").use { c ->
+            assertEquals(1, c.count)
+            c.moveToFirst()
+            assertEquals(10.0, c.getDouble(0), 0.001)
+            assertEquals(35000.0, c.getDouble(1), 0.001)
+            assertEquals("a trade from before the link must read as unlinked", 0L, c.getLong(2))
+        }
+
+        db.query("SELECT balance FROM accounts").use { c ->
+            assertEquals(1, c.count)
+            c.moveToFirst()
+            assertEquals(15000.0, c.getDouble(0), 0.001)
+        }
+
+        // The composite key is what makes re-deleting the same row idempotent.
+        db.execSQL("INSERT OR REPLACE INTO deleted_records (tableName, rowId, deletedAt) VALUES ('transactions', 7, 1)")
+        db.execSQL("INSERT OR REPLACE INTO deleted_records (tableName, rowId, deletedAt) VALUES ('transactions', 7, 2)")
+        db.query("SELECT COUNT(*) FROM deleted_records WHERE tableName = 'transactions'").use { c ->
+            c.moveToFirst()
+            assertEquals(1, c.getInt(0))
         }
 
         db.close()

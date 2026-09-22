@@ -28,9 +28,9 @@ import com.example.financemanager.data.InvestmentTransaction
 import com.example.financemanager.data.InvestmentTxnType
 import com.example.financemanager.data.InvestmentType
 import com.example.financemanager.theme.*
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
-import com.example.financemanager.ui.components.iOSCard
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import com.example.financemanager.ui.viewmodel.InvestmentHolding
@@ -54,10 +54,17 @@ fun InvestmentsScreen(
     val isRefreshing by viewModel.isRefreshingPrices.collectAsStateWithLifecycle()
     var showAddDialog by remember { mutableStateOf(false) }
 
+    // "Invested" is the cost of the units still held, not of everything ever bought — selling
+    // takes its own cost out with it. Gain / loss is therefore purely unrealised, and profit
+    // already taken is reported on its own line rather than blended in, where a holding sold high
+    // and re-bought low would read as a loss.
     val totalInvested = holdings.sumOf { it.investedAmount }
     val totalCurrent = holdings.sumOf { it.currentValue }
     val totalGainLoss = totalCurrent - totalInvested
+    val totalRealized = holdings.sumOf { it.realizedGain }
     val totalGainLossPercent = if (totalInvested > 0.0) (totalGainLoss / totalInvested) * 100 else 0.0
+
+    InvestmentErrorSnackbar(viewModel)
 
     Scaffold(
         topBar = {
@@ -121,12 +128,29 @@ fun InvestmentsScreen(
                                 Text(moneyString(totalInvested), style = Typography.titleMedium.copy(color = TextPrimary))
                             }
                             Column(horizontalAlignment = Alignment.End) {
-                                Text("Gain / Loss", style = Typography.labelMedium.copy(color = TextSecondary))
+                                Text("Unrealised", style = Typography.labelMedium.copy(color = TextSecondary))
                                 val glColor = if (totalGainLoss >= 0.0) AccentGreen else AlertRed
                                 val sign = if (totalGainLoss >= 0.0) "+" else ""
                                 Text(
                                     "$sign${moneyString(totalGainLoss)} ($sign${String.format(Locale.getDefault(), "%.1f", totalGainLossPercent)}%)",
                                     style = Typography.titleMedium.copy(color = glColor, fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+                        if (kotlin.math.abs(totalRealized) > 0.005) {
+                            Spacer(modifier = Modifier.height(10.dp))
+                            HorizontalDivider(color = BorderColor)
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text("Realised (booked)", style = Typography.labelMedium.copy(color = TextSecondary))
+                                val realizedColor = if (totalRealized >= 0.0) AccentGreen else AlertRed
+                                val realizedSign = if (totalRealized >= 0.0) "+" else ""
+                                Text(
+                                    "$realizedSign${moneyString(totalRealized)}",
+                                    style = Typography.bodyMedium.copy(color = realizedColor, fontWeight = FontWeight.Bold)
                                 )
                             }
                         }
@@ -174,7 +198,7 @@ private fun HoldingCard(holding: InvestmentHolding, onClick: () -> Unit) {
     val glColor = if (holding.gainLoss >= 0.0) AccentGreen else AlertRed
     val sign = if (holding.gainLoss >= 0.0) "+" else ""
 
-    iOSCard(modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
+    IosCard(modifier = Modifier.fillMaxWidth().clickable { onClick() }) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -266,7 +290,7 @@ private fun AddInvestmentDialog(
             }
         },
         confirmButton = {
-            iOSButton(
+            IosButton(
                 onClick = {
                     if (name.isNotBlank()) {
                         onConfirm(
@@ -277,7 +301,7 @@ private fun AddInvestmentDialog(
                         )
                     }
                 },
-                variant = iOSButtonVariant.Accent,
+                variant = IosButtonVariant.Accent,
                 accentColor = PrimaryViolet,
                 enabled = name.isNotBlank()
             ) {
@@ -316,6 +340,8 @@ fun InvestmentDetailScreen(
     var showManualPriceDialog by remember { mutableStateOf(false) }
     var showDeleteInvestmentConfirm by remember { mutableStateOf(false) }
 
+    InvestmentErrorSnackbar(viewModel)
+
     Scaffold(
         topBar = {
             TopAppBar(
@@ -337,7 +363,7 @@ fun InvestmentDetailScreen(
     ) { paddingValues ->
         Column(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
             if (holding != null) {
-                iOSCard(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                IosCard(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Column {
@@ -374,6 +400,21 @@ fun InvestmentDetailScreen(
                                 style = Typography.bodyMedium.copy(color = glColor, fontWeight = FontWeight.Bold)
                             )
                         }
+                        // Profit taken on units already sold, priced against what those units cost
+                        // at the moment they went. Kept off the line above so a holding that was
+                        // sold high and bought back lower doesn't read as a loss.
+                        if (kotlin.math.abs(holding.realizedGain) > 0.005) {
+                            Spacer(modifier = Modifier.height(6.dp))
+                            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Realised (booked)", style = Typography.bodyMedium.copy(color = TextSecondary))
+                                val realizedColor = if (holding.realizedGain >= 0.0) AccentGreen else AlertRed
+                                val realizedSign = if (holding.realizedGain >= 0.0) "+" else ""
+                                Text(
+                                    "$realizedSign${moneyString(holding.realizedGain)}",
+                                    style = Typography.bodyMedium.copy(color = realizedColor, fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -381,22 +422,22 @@ fun InvestmentDetailScreen(
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    iOSButton(
+                    IosButton(
                         onClick = { logType = InvestmentTxnType.BUY; showLogDialog = true },
                         modifier = Modifier.weight(1f),
-                        variant = iOSButtonVariant.Accent,
+                        variant = IosButtonVariant.Accent,
                         accentColor = AccentGreen
                     ) { Text("Log Buy") }
-                    iOSButton(
+                    IosButton(
                         onClick = { logType = InvestmentTxnType.SIP_INSTALLMENT; showLogDialog = true },
                         modifier = Modifier.weight(1f),
-                        variant = iOSButtonVariant.Accent,
+                        variant = IosButtonVariant.Accent,
                         accentColor = SecondaryTeal
                     ) { Text("Log SIP") }
-                    iOSButton(
+                    IosButton(
                         onClick = { logType = InvestmentTxnType.SELL; showLogDialog = true },
                         modifier = Modifier.weight(1f),
-                        variant = iOSButtonVariant.Accent,
+                        variant = IosButtonVariant.Accent,
                         accentColor = AlertRed
                     ) { Text("Log Sell") }
                 }
@@ -496,12 +537,12 @@ fun InvestmentDetailScreen(
                 )
             },
             confirmButton = {
-                iOSButton(
+                IosButton(
                     onClick = {
                         priceStr.toDoubleOrNull()?.let { viewModel.updateInvestmentPriceManually(holding.investment, it) }
                         showManualPriceDialog = false
                     },
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = SecondaryTeal
                 ) { Text("Update") }
             },
@@ -545,7 +586,7 @@ private fun InvestmentTxnItem(
         InvestmentTxnType.SELL -> "Sell" to AlertRed
     }
 
-    iOSCard(modifier = Modifier.fillMaxWidth()) {
+    IosCard(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -664,9 +705,9 @@ private fun LogInvestmentTxnDialog(
             val qty = quantityStr.toDoubleOrNull()
             val price = priceStr.toDoubleOrNull()
             val isValid = qty != null && qty > 0.0 && price != null && price > 0.0 && selectedAccount != null
-            iOSButton(
+            IosButton(
                 onClick = { onConfirm(qty!!, price!!, selectedAccount!!.id, selectedDate.timeInMillis) },
-                variant = iOSButtonVariant.Accent,
+                variant = IosButtonVariant.Accent,
                 accentColor = PrimaryViolet,
                 enabled = isValid
             ) { Text("Save") }
@@ -693,4 +734,29 @@ private fun LogInvestmentTxnDialog(
             DatePicker(state = datePickerState)
         }
     }
+}
+
+
+/**
+ * Shows why an investment action was refused, then clears it.
+ *
+ * Overselling and mistyped amounts used to close the sheet and do nothing at all, which reads as
+ * "logged" — so the user found out by noticing the portfolio was wrong later, if at all. A dialog
+ * rather than a snackbar because the action the user asked for did not happen.
+ */
+@Composable
+private fun InvestmentErrorSnackbar(viewModel: FinanceViewModel) {
+    val error by viewModel.investmentError.collectAsStateWithLifecycle()
+    val message = error ?: return
+    AlertDialog(
+        onDismissRequest = { viewModel.clearInvestmentError() },
+        containerColor = DarkSurface,
+        title = { Text("Can't log that", style = Typography.titleMedium.copy(color = TextPrimary)) },
+        text = { Text(message, style = Typography.bodyMedium.copy(color = TextSecondary)) },
+        confirmButton = {
+            TextButton(onClick = { viewModel.clearInvestmentError() }) {
+                Text("OK", style = Typography.labelLarge.copy(color = PrimaryViolet))
+            }
+        }
+    )
 }

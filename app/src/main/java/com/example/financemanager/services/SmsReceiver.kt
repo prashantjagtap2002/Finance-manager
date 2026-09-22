@@ -15,7 +15,24 @@ import java.security.MessageDigest
 import java.util.Locale
 
 class SmsReceiver : BroadcastReceiver() {
+
+    /**
+     * The receiver is exported — it has to be, for the system to deliver SMS to it — so the first
+     * thing it does is check that this really is an SMS broadcast.
+     *
+     * The action was checked before too, but only after the work had already been handed to a
+     * coroutine and a `goAsync()` token taken out. Anything that could reach the receiver got a
+     * background thread and a held wake token out of it before being turned away. Rejecting an
+     * unexpected intent here costs nothing and starts nothing. `BROADCAST_SMS` in the manifest is
+     * the real gate; this is the part that does not depend on the manifest being right.
+     */
     override fun onReceive(context: Context, intent: Intent) {
+        val action = intent.action
+        if (action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION &&
+            action != Telephony.Sms.Intents.SMS_DELIVER_ACTION) {
+            return
+        }
+
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
@@ -27,12 +44,6 @@ class SmsReceiver : BroadcastReceiver() {
     }
 
     private suspend fun processSms(context: Context, intent: Intent) {
-        val action = intent.action
-        if (action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION &&
-            action != Telephony.Sms.Intents.SMS_DELIVER_ACTION) {
-            return
-        }
-
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
         if (messages.isEmpty()) return
 
@@ -49,7 +60,7 @@ class SmsReceiver : BroadcastReceiver() {
         val smsHash = generateSmsHash(sender, messageBody, receivedAtMillis)
 
         val db = FinanceDatabase.getDatabase(context.applicationContext)
-        val dao = db.financeDao()
+        val dao = db.dao()
 
         val insertedId = dao.insertSmsTransaction(
             SmsTransaction(

@@ -76,7 +76,7 @@ class FinanceWidgetProvider : AppWidgetProvider() {
      * both correct by construction and the more useful number to see on a home screen.
      */
     private suspend fun loadSnapshot(context: Context): WidgetSnapshot {
-        val dao = FinanceDatabase.getDatabase(context).financeDao()
+        val dao = FinanceDatabase.getDatabase(context).dao()
 
         val startOfDay = Calendar.getInstance().apply {
             set(Calendar.HOUR_OF_DAY, 0)

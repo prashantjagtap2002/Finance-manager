@@ -29,7 +29,7 @@ class RecurringTransactionWorker(
             // This worker can be what starts the process, so the currency symbol and the privacy
             // flag both have to be loaded before anything formats an amount for a notification.
             FinancePreferences.init(applicationContext)
-            val dao = FinanceDatabase.getDatabase(applicationContext).financeDao()
+            val dao = FinanceDatabase.getDatabase(applicationContext).dao()
 
             // Bills the user has to pay by hand, landing within the next two days.
             val now = System.currentTimeMillis()

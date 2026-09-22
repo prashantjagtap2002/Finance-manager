@@ -35,7 +35,7 @@ import com.example.financemanager.theme.TextPrimary
  * - Destructive: solid red
  * - Accent: caller-supplied colour, for category-tinted actions
  */
-enum class iOSButtonVariant {
+enum class IosButtonVariant {
     Filled,
     Tinted,
     Outlined,
@@ -44,34 +44,34 @@ enum class iOSButtonVariant {
     Accent
 }
 
-enum class iOSButtonSize {
+enum class IosButtonSize {
     Large,   // 52dp
     Medium,  // 44dp — standard touch target
     Small    // 34dp
 }
 
 @Composable
-fun iOSButton(
+fun IosButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    variant: iOSButtonVariant = iOSButtonVariant.Filled,
-    size: iOSButtonSize = iOSButtonSize.Medium,
+    variant: IosButtonVariant = IosButtonVariant.Filled,
+    size: IosButtonSize = IosButtonSize.Medium,
     enabled: Boolean = true,
     accentColor: Color = PrimaryViolet,
     content: @Composable RowScope.() -> Unit
 ) {
     val sizeSpec = when (size) {
-        iOSButtonSize.Large -> Triple(
+        IosButtonSize.Large -> Triple(
             52.dp,
             PaddingValues(horizontal = 22.dp, vertical = 14.dp),
             TextStyle(fontSize = 16.sp, fontWeight = FontWeight.SemiBold, letterSpacing = (-0.2).sp)
         )
-        iOSButtonSize.Medium -> Triple(
+        IosButtonSize.Medium -> Triple(
             44.dp,
             PaddingValues(horizontal = 18.dp, vertical = 11.dp),
             TextStyle(fontSize = 15.sp, fontWeight = FontWeight.Medium, letterSpacing = (-0.1).sp)
         )
-        iOSButtonSize.Small -> Triple(
+        IosButtonSize.Small -> Triple(
             34.dp,
             PaddingValues(horizontal = 14.dp, vertical = 8.dp),
             TextStyle(fontSize = 13.sp, fontWeight = FontWeight.Medium)
@@ -83,12 +83,12 @@ fun iOSButton(
     val onFilled = OnAccent
 
     val (backgroundColor, contentColor) = when (variant) {
-        iOSButtonVariant.Filled -> accent to onFilled
-        iOSButtonVariant.Tinted -> PrimarySoft to accent
-        iOSButtonVariant.Outlined -> Color.Transparent to TextPrimary
-        iOSButtonVariant.Plain -> Color.Transparent to accent
-        iOSButtonVariant.Destructive -> AlertRed to onFilled
-        iOSButtonVariant.Accent -> accentColor to
+        IosButtonVariant.Filled -> accent to onFilled
+        IosButtonVariant.Tinted -> PrimarySoft to accent
+        IosButtonVariant.Outlined -> Color.Transparent to TextPrimary
+        IosButtonVariant.Plain -> Color.Transparent to accent
+        IosButtonVariant.Destructive -> AlertRed to onFilled
+        IosButtonVariant.Accent -> accentColor to
             if (accentColor.luminance() > 0.45f) Color(0xFF0C0E12) else Color.White
     }
 
@@ -97,7 +97,7 @@ fun iOSButton(
         modifier = modifier.height(height),
         enabled = enabled,
         shape = RoundedCornerShape(FieldRadius),
-        border = if (variant == iOSButtonVariant.Outlined) BorderStroke(1.dp, BorderColor) else null,
+        border = if (variant == IosButtonVariant.Outlined) BorderStroke(1.dp, BorderColor) else null,
         colors = ButtonDefaults.buttonColors(
             containerColor = backgroundColor,
             contentColor = contentColor,

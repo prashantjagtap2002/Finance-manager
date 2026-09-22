@@ -376,6 +376,57 @@ interface FinanceDao : RecurringStore {
     @Query("DELETE FROM expense_group_expenses")
     suspend fun clearExpenseGroupExpenses()
 
+    // --- Deletion records (tombstones) ---
+    // What makes a cloud delete safe: see [DeletedRecord]. Nothing here ever removes a row the
+    // user still has — a tombstone is written only once its row is already gone.
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertDeletedRecord(record: DeletedRecord)
+
+    @Query("SELECT rowId FROM deleted_records WHERE tableName = :tableName")
+    suspend fun getDeletedRowIds(tableName: String): List<Long>
+
+    /**
+     * Forgets a tombstone, for when the row comes back — an undo, or a restore that writes the
+     * same id again. Leaving it behind would let the next sync delete the revived row from the
+     * cloud.
+     */
+    @Query("DELETE FROM deleted_records WHERE tableName = :tableName AND rowId = :rowId")
+    suspend fun forgetDeletedRecord(tableName: String, rowId: Long)
+
+    @Query("DELETE FROM deleted_records WHERE deletedAt < :before")
+    suspend fun pruneDeletedRecords(before: Long)
+
+    @Query("DELETE FROM deleted_records")
+    suspend fun clearDeletedRecords()
+
+    // --- Investment holdings ---
+
+    /**
+     * One holding's trades oldest first. Cost basis is path-dependent — a sell has to be priced
+     * against the average of the units held *at that moment* — so the order is part of the query
+     * rather than something each caller re-sorts.
+     */
+    @Query("SELECT * FROM investment_transactions WHERE investmentId = :investmentId ORDER BY date ASC, id ASC")
+    suspend fun getInvestmentTransactionsFor(investmentId: Long): List<InvestmentTransaction>
+
+    @Query("SELECT * FROM investment_transactions WHERE id = :id")
+    suspend fun getInvestmentTransactionById(id: Long): InvestmentTransaction?
+
+    // --- One-currency enforcement ---
+    // The app has a single home currency and every amount on screen is rendered in it, so a row
+    // carrying a different code is a row whose number would be added to a total it doesn't belong
+    // in. These re-stamp the codes rather than touching any amount. See
+    // `FinanceRepository.normalizeCurrencies`.
+
+    @Query("UPDATE accounts SET currency = :code, updatedAt = :now WHERE currency != :code")
+    suspend fun normalizeAccountCurrency(code: String, now: Long): Int
+
+    // The stamp moves with the write, as it does for any other local edit: without it the cloud
+    // keeps its old label and the two sides disagree forever, each thinking the other is no newer.
+    @Query("UPDATE transactions SET currency = :code, updatedAt = :now WHERE currency != :code")
+    suspend fun normalizeTransactionCurrency(code: String, now: Long): Int
+
     /**
      * Replaces restorable data atomically so a failed backup import rolls back completely.
      *

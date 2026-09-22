@@ -20,8 +20,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.unit.dp
 import com.example.financemanager.data.*
 import com.example.financemanager.theme.*
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSTopAppBar
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosTopAppBar
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import java.text.SimpleDateFormat
@@ -84,7 +84,7 @@ fun CustomInsightScreen(viewModel: FinanceViewModel, onNavigateBack: () -> Unit)
     }
 
     Scaffold(
-        topBar = { iOSTopAppBar("Create Insight", navigationIcon = { IconButton(onClick = onNavigateBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } }) },
+        topBar = { IosTopAppBar("Create Insight", navigationIcon = { IconButton(onClick = onNavigateBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } }) },
         containerColor = DeepBackground
     ) { padding ->
         LazyColumn(modifier = Modifier.fillMaxSize().padding(padding).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(14.dp), contentPadding = PaddingValues(bottom = 32.dp)) {
@@ -95,7 +95,7 @@ fun CustomInsightScreen(viewModel: FinanceViewModel, onNavigateBack: () -> Unit)
                 }
             }
             item {
-                iOSCard(Modifier.fillMaxWidth()) {
+                IosCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         InsightDropdown("Metric", metric.label, openMenu == "metric", { openMenu = if (openMenu == "metric") null else "metric" }) {
                             InsightMetric.entries.forEach { option -> DropdownMenuItem(text = { Text(option.label) }, onClick = { metric = option; openMenu = null }) }
@@ -111,7 +111,7 @@ fun CustomInsightScreen(viewModel: FinanceViewModel, onNavigateBack: () -> Unit)
                 }
             }
             item {
-                iOSCard(Modifier.fillMaxWidth()) {
+                IosCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text("Live preview", color = TextSecondary, style = MaterialTheme.typography.labelLarge)
                         Text("${metric.label} • ${period.label} • ${visual.label}", color = TextPrimary, style = MaterialTheme.typography.titleMedium)

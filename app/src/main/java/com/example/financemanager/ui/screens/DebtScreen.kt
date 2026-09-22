@@ -34,10 +34,10 @@ import com.example.financemanager.data.Debt
 import com.example.financemanager.data.DebtType
 import com.example.financemanager.theme.*
 import com.example.financemanager.theme.Typography
-import com.example.financemanager.ui.components.iOSButton
-import com.example.financemanager.ui.components.iOSButtonVariant
-import com.example.financemanager.ui.components.iOSCard
-import com.example.financemanager.ui.components.iOSCardStyle
+import com.example.financemanager.ui.components.IosButton
+import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosCardStyle
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import java.text.SimpleDateFormat
@@ -125,9 +125,9 @@ fun DebtScreen(
                     .padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                iOSCard(
+                IosCard(
                     modifier = Modifier.weight(1f),
-                    style = iOSCardStyle.Grouped
+                    style = IosCardStyle.Grouped
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -147,9 +147,9 @@ fun DebtScreen(
                     }
                 }
 
-                iOSCard(
+                IosCard(
                     modifier = Modifier.weight(1f),
-                    style = iOSCardStyle.Grouped
+                    style = IosCardStyle.Grouped
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -237,8 +237,8 @@ fun DebtScreen(
                         val isSingle = personDebts.size == 1
                         
                         item(key = "header_$personKey") {
-                            iOSCard(
-                                style = iOSCardStyle.Grouped,
+                            IosCard(
+                                style = IosCardStyle.Grouped,
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
@@ -341,8 +341,8 @@ fun DebtScreen(
                         
                         if (showSettled) {
                             items(settledDebts, key = { it.id }) { debt ->
-                                iOSCard(
-                                    style = iOSCardStyle.Grouped,
+                                IosCard(
+                                    style = IosCardStyle.Grouped,
                                     modifier = Modifier.fillMaxWidth().alpha(0.6f)
                                 ) {
                                     DebtItemRow(
@@ -422,7 +422,7 @@ fun DebtScreen(
                     }
                 }
                 
-                iOSButton(
+                IosButton(
                     onClick = {
                         val amt = paymentAmount.toDoubleOrNull()
                         if (amt != null && amt > 0 && selectedAccount != null) {
@@ -431,7 +431,7 @@ fun DebtScreen(
                         }
                     },
                     modifier = Modifier.fillMaxWidth().height(48.dp),
-                    variant = iOSButtonVariant.Accent,
+                    variant = IosButtonVariant.Accent,
                     accentColor = SecondaryTeal
                 ) {
                     Text("Confirm Payment", fontWeight = FontWeight.Bold)

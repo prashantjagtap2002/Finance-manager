@@ -33,16 +33,16 @@ import com.example.financemanager.theme.TextPrimary
  * - Elevated: same surface, slightly stronger border for the one card on a
  *   screen that should pull focus
  */
-enum class iOSCardStyle {
+enum class IosCardStyle {
     Plain,
     Grouped,
     Elevated
 }
 
 @Composable
-fun iOSCard(
+fun IosCard(
     modifier: Modifier = Modifier,
-    style: iOSCardStyle = iOSCardStyle.Grouped,
+    style: IosCardStyle = IosCardStyle.Grouped,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val isDark = LocalThemeIsDark.current
@@ -50,11 +50,11 @@ fun iOSCard(
     val hairline = BorderColor
 
     val (backgroundColor, borderColor) = when (style) {
-        iOSCardStyle.Plain -> Color.Transparent to Color.Transparent
-        iOSCardStyle.Grouped -> surface to hairline
+        IosCardStyle.Plain -> Color.Transparent to Color.Transparent
+        IosCardStyle.Grouped -> surface to hairline
         // Emphasis reads as "lighter" on a dark canvas and as "more defined"
         // on a light one, so it is not the same move in both themes.
-        iOSCardStyle.Elevated ->
+        IosCardStyle.Elevated ->
             if (isDark) SubtleSurface to hairline
             else surface to hairline
     }
@@ -63,8 +63,8 @@ fun iOSCard(
     // itself. Plain draws no box, so it casts nothing either.
     val shadow = when {
         isDark -> 0.dp
-        style == iOSCardStyle.Plain -> 0.dp
-        style == iOSCardStyle.Elevated -> 4.dp
+        style == IosCardStyle.Plain -> 0.dp
+        style == IosCardStyle.Elevated -> 4.dp
         else -> 2.dp
     }
 
@@ -86,7 +86,7 @@ fun iOSCard(
  * column rather than cutting the card edge to edge.
  */
 @Composable
-fun iOSListSeparator(
+fun IosListSeparator(
     modifier: Modifier = Modifier
 ) {
     HorizontalDivider(

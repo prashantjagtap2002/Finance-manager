@@ -6,7 +6,7 @@ data class MergePlan<L, R>(
     val toPush: List<L>,
     /** Server rows to write over the local copy. */
     val toApply: List<R>,
-    /** Server row ids this device no longer has. */
+    /** Server row ids this device recorded a deletion for. */
     val toDelete: List<Long>
 )
 
@@ -28,10 +28,14 @@ data class MergePlan<L, R>(
  * overrides this for a restore, where the server is authoritative by definition: a fresh install's
  * seed rows carry the *current* time and would otherwise outrank the real data they collide with.
  *
- * **Whether a row exists** is decided locally, because nothing records a deletion. A server row
- * missing from this device reads as "deleted here" when [deleteMissing] is on, and as "created
- * elsewhere" when it is off. Getting that backwards is what made deletions come back from the
- * dead, so only a caller that knows the local database is trustworthy passes true.
+ * **Whether a row was deleted** is answered by [locallyDeletedIds] — the tombstones this device
+ * wrote when the user actually deleted something — and by nothing else. Absence used to be the
+ * answer, which is a different question with the same shape: a row missing locally is *either* one
+ * this device deleted *or* one another device created and this device has not pulled yet, and the
+ * two are indistinguishable without a record of the deletion. Reading absence as deletion meant a
+ * transaction entered on a second device could be wiped out of the cloud by the first one before
+ * it ever arrived. Now a row that is missing locally and carries no tombstone is imported, so the
+ * worst a wrong guess can do is bring a row back rather than destroy one.
  */
 fun <L, R> planMerge(
     local: List<L>,
@@ -40,7 +44,7 @@ fun <L, R> planMerge(
     remote: List<R>,
     remoteId: (R) -> Long,
     remoteStamp: (R) -> Long,
-    deleteMissing: Boolean,
+    locallyDeletedIds: Set<Long>,
     remoteWins: Boolean
 ): MergePlan<L, R> {
     val localById = local.associateBy(localId)
@@ -58,19 +62,16 @@ fun <L, R> planMerge(
     val toApply = remote.filter { row ->
         val counterpart = localById[remoteId(row)]
         when {
-            // Absent locally: either this device deleted it or another device created it, and
-            // deleteMissing is the caller telling us which.
-            counterpart == null -> !deleteMissing
+            // Absent locally with no tombstone: another device made this, so take it. Absent with
+            // a tombstone: this device deleted it, so it is on its way out instead.
+            counterpart == null -> remoteId(row) !in locallyDeletedIds
             remoteWins -> true
             else -> remoteStamp(row) > localStamp(counterpart)
         }
     }
 
-    val toDelete = if (deleteMissing) {
-        remote.map(remoteId).filter { !localById.containsKey(it) }
-    } else {
-        emptyList()
-    }
+    // Only rows this device holds a deletion record for, and only while the server still has them.
+    val toDelete = remote.map(remoteId).filter { it in locallyDeletedIds && !localById.containsKey(it) }
 
     return MergePlan(toPush = toPush, toApply = toApply, toDelete = toDelete)
 }
