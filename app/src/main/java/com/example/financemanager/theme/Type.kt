@@ -13,9 +13,15 @@ import androidx.compose.ui.unit.sp
 // Large Title → Title 1/2/3 → Headline → Body → Callout → Subhead → Footnote
 // ============================================================================
 
+// Tabular figures on every style. Amounts are the content of this app: proportional digits make
+// a column of balances ragged and make a changing total shuffle sideways as its digits change.
+// Apple's own finance surfaces (Wallet, Stocks) set figures the same way.
+private const val Figures = "tnum"
+
 // iOS Large Title - 34sp Bold (used for hero sections, large navigation titles)
 val iOSLargeTitle = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.SemiBold,
     fontSize = 34.sp,
     lineHeight = 40.sp,
@@ -25,6 +31,7 @@ val iOSLargeTitle = TextStyle(
 // iOS Title 1 - 28sp Bold (used for screen titles)
 val iOSTitle1 = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.SemiBold,
     fontSize = 28.sp,
     lineHeight = 34.sp,
@@ -34,6 +41,7 @@ val iOSTitle1 = TextStyle(
 // iOS Title 2 - 22sp Bold (used for section headers)
 val iOSTitle2 = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.SemiBold,
     fontSize = 22.sp,
     lineHeight = 28.sp,
@@ -43,6 +51,7 @@ val iOSTitle2 = TextStyle(
 // iOS Title 3 - 20sp Semibold (used for subsection headers)
 val iOSTitle3 = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.SemiBold,
     fontSize = 20.sp,
     lineHeight = 26.sp,
@@ -52,6 +61,7 @@ val iOSTitle3 = TextStyle(
 // iOS Headline - 17sp Semibold (used for emphasis)
 val iOSHeadline = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.Medium,
     fontSize = 17.sp,
     lineHeight = 22.sp,
@@ -61,6 +71,7 @@ val iOSHeadline = TextStyle(
 // iOS Body - 17sp Regular (primary text - same size as Headline but regular weight)
 val iOSBody = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.Normal,
     fontSize = 17.sp,
     lineHeight = 22.sp,
@@ -70,6 +81,7 @@ val iOSBody = TextStyle(
 // iOS Callout - 16sp Regular (secondary body text, used in lists)
 val iOSCallout = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.Normal,
     fontSize = 16.sp,
     lineHeight = 21.sp,
@@ -79,6 +91,7 @@ val iOSCallout = TextStyle(
 // iOS Subhead - 15sp Regular (tertiary text)
 val iOSSubhead = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.Normal,
     fontSize = 15.sp,
     lineHeight = 20.sp,
@@ -88,6 +101,7 @@ val iOSSubhead = TextStyle(
 // iOS Footnote - 13sp Regular (captions, metadata)
 val iOSFootnote = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.Normal,
     fontSize = 13.sp,
     lineHeight = 18.sp,
@@ -97,6 +111,7 @@ val iOSFootnote = TextStyle(
 // iOS Caption 1 - 12sp Regular (tiny labels)
 val iOSCaption1 = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.Medium,
     fontSize = 12.sp,
     lineHeight = 16.sp,
@@ -108,6 +123,7 @@ val iOSCaption1 = TextStyle(
 // where letter-spacing goes positive.
 val iOSCaption2 = TextStyle(
     fontFamily = FontFamily.SansSerif,
+    fontFeatureSettings = Figures,
     fontWeight = FontWeight.Medium,
     fontSize = 11.sp,
     lineHeight = 15.sp,

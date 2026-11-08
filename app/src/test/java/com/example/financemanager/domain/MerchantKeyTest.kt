@@ -40,4 +40,21 @@ class MerchantKeyTest {
         val key = MerchantKey.normalize("A".repeat(200))
         assertTrue(key.length <= 48)
     }
+
+    @Test
+    fun bestMatch_findsARuleLearnedUnderABankTruncatedName() {
+        val rules = setOf("rameshkumar sh", "swiggy")
+        val full = MerchantKey.normalize("RAMESHKUMAR SHRIGHUR")
+        assertEquals("rameshkumar sh", MerchantKey.bestMatch(full, rules))
+        // And the other way round: a rule under the full name serves a truncated alert.
+        assertEquals("rameshkumar shrighur", MerchantKey.bestMatch("rameshkumar sh", setOf("rameshkumar shrighur")))
+    }
+
+    @Test
+    fun bestMatch_prefersExactAndRefusesShortPrefixes() {
+        assertEquals("swiggy", MerchantKey.bestMatch("swiggy", setOf("swiggy", "swiggy instamart")))
+        assertEquals(null, MerchantKey.bestMatch("jiomart", setOf("jio")))
+        assertEquals(null, MerchantKey.bestMatch("", setOf("anything long")))
+        assertEquals(null, MerchantKey.bestMatch("vipin chandra shukla", setOf("rameshkumar sh")))
+    }
 }

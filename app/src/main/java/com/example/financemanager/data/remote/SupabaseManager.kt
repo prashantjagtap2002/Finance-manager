@@ -4,9 +4,12 @@ import com.example.financemanager.BuildConfig
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
 import io.github.jan.supabase.auth.auth
+import io.github.jan.supabase.auth.status.SessionStatus
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.postgrest.Postgrest
 import io.github.jan.supabase.serializer.KotlinXSerializer
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 
 /**
@@ -54,24 +57,50 @@ object SupabaseManager {
     val isConfigured: Boolean
         get() = BuildConfig.SUPABASE_URL.isNotBlank() && BuildConfig.SUPABASE_KEY.isNotBlank()
 
+    /** Serialises [ensureSignedIn]: the app and the sync worker both call it at startup. */
+    private val signInLock = Mutex()
+
     /**
-     * Ensures there is a signed-in (anonymous) session, creating one on first launch.
+     * Ensures there is a signed-in (anonymous) session, creating one on first launch only.
      *
      * There used to be a second copy of the access and refresh tokens here, written to a
      * SharedPreferences file in plaintext and re-imported on the next launch. It bought nothing:
      * awaitInitialization already restores the session the Auth plugin saved for itself. All the
      * copy did was put a second set of live credentials on disk, so it is gone.
+     *
+     * A new anonymous user is minted only when the plugin reports that nobody is signed in. It
+     * used to be minted whenever `currentSessionOrNull()` was null — and that is also null while a
+     * stored session is merely failing to refresh. The access token lasts an hour, so the first
+     * start after that does a refresh, and one dropped request (offline, a captive portal, DNS not
+     * up yet) left the plugin in RefreshFailure while it retried. This then signed in as somebody
+     * new and the plugin saved that session over the real one. An anonymous identity can't be
+     * signed back into, so every row already in the cloud was stranded under the old id, and RLS
+     * rejected each later upload of those same ids — the "Last sync failed" that never cleared.
+     * A refresh failure now just returns null; the plugin keeps retrying and the next sync gets
+     * the same user back.
+     *
+     * Two callers at once with no session would also each mint a user, hence [signInLock].
      */
     suspend fun ensureSignedIn(): String? {
         if (!isConfigured) return null
         return try {
-            val auth = client.auth
-            // Restores whatever session the plugin persisted, if any.
-            auth.awaitInitialization()
-            if (auth.currentSessionOrNull() == null) {
-                auth.signInAnonymously()
+            signInLock.withLock {
+                val auth = client.auth
+                // Restores whatever session the plugin persisted, if any.
+                auth.awaitInitialization()
+                when (val status = auth.sessionStatus.value) {
+                    is SessionStatus.Authenticated -> status.session.user?.id
+                    is SessionStatus.NotAuthenticated -> {
+                        auth.signInAnonymously()
+                        auth.currentUserOrNull()?.id
+                    }
+                    is SessionStatus.RefreshFailure -> {
+                        android.util.Log.w("SupabaseManager", "Stored session failed to refresh; keeping it and retrying later")
+                        null
+                    }
+                    SessionStatus.Initializing -> null
+                }
             }
-            auth.currentUserOrNull()?.id
         } catch (e: Exception) {
             android.util.Log.e("SupabaseManager", "Failed to ensure signed in", e)
             null

@@ -38,9 +38,12 @@ object FinancePreferences {
     private const val KEY_PAY_CYCLE_FREQUENCY = "pay_cycle_frequency"
     private const val KEY_PAY_CYCLE_ANCHOR_DAY = "pay_cycle_anchor_day"
     private const val KEY_PRIVACY_MODE = "privacy_mode"
+    private const val KEY_ALLOW_SCREENSHOTS = "allow_screenshots"
     private const val KEY_DISMISSED_SMS_LINKS = "dismissed_sms_links"
     private const val KEY_DASHBOARD_SECTIONS = "dashboard_sections"
     private const val KEY_CLOUD_SYNC_ENABLED = "cloud_sync_enabled"
+    private const val KEY_DISMISSED_DUPLICATES = "dismissed_duplicates"
+    private const val KEY_FORECAST_INTRODUCED = "forecast_section_introduced"
 
     const val FREE_SCAN_LIMIT = 10
 
@@ -84,6 +87,15 @@ object FinancePreferences {
     val privacyMode: Boolean get() = _privacyMode.value
 
     /**
+     * Lets screenshots and the recents preview through while App Lock is on, which otherwise
+     * sets FLAG_SECURE. Off by default so turning the lock on keeps meaning what it always has.
+     * Snapshot state for the same reason as [privacyMode]: MainActivity reads it in composition
+     * and re-applies the window flag the moment it flips.
+     */
+    private val _allowScreenshots = mutableStateOf(false)
+    val allowScreenshots: Boolean get() = _allowScreenshots.value
+
+    /**
      * Whether the app may copy anything to Supabase. On by default so existing installs keep the
      * behaviour they had, but it is the user's data leaving their device, so it has to be theirs
      * to stop — there was no way to turn sync off at all.
@@ -106,12 +118,18 @@ object FinancePreferences {
             ?: PayCycleFrequency.MONTHLY
         _payCycleAnchorDayFlow.value = prefs.getInt(KEY_PAY_CYCLE_ANCHOR_DAY, 1).coerceAtLeast(1)
         _privacyMode.value = prefs.getBoolean(KEY_PRIVACY_MODE, false)
+        _allowScreenshots.value = prefs.getBoolean(KEY_ALLOW_SCREENSHOTS, false)
         _cloudSyncEnabledFlow.value = prefs.getBoolean(KEY_CLOUD_SYNC_ENABLED, true)
     }
 
     fun setPrivacyMode(enabled: Boolean) {
         prefs().edit().putBoolean(KEY_PRIVACY_MODE, enabled).apply()
         _privacyMode.value = enabled
+    }
+
+    fun setAllowScreenshots(allowed: Boolean) {
+        prefs().edit().putBoolean(KEY_ALLOW_SCREENSHOTS, allowed).apply()
+        _allowScreenshots.value = allowed
     }
 
     fun setCloudSyncEnabled(enabled: Boolean) {
@@ -127,13 +145,27 @@ object FinancePreferences {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(KEY_CLOUD_SYNC_ENABLED, true)
 
-    fun dashboardSections(): Set<String> = prefs().getStringSet(
-        KEY_DASHBOARD_SECTIONS,
-        setOf("accounts", "budgets", "transactions", "intelligence")
-    )?.toSet() ?: emptySet()
+    fun dashboardSections(): Set<String> {
+        val stored = prefs().getStringSet(KEY_DASHBOARD_SECTIONS, null)?.toSet()
+            ?: return setOf("forecast", "accounts", "budgets", "transactions", "intelligence")
+        // The forecast section arrived after people had already saved a layout. Switch it on once
+        // for them; after that, whatever they choose in the customise dialog sticks.
+        if ("forecast" !in stored && !prefs().getBoolean(KEY_FORECAST_INTRODUCED, false)) {
+            val updated = stored + "forecast"
+            prefs().edit()
+                .putStringSet(KEY_DASHBOARD_SECTIONS, updated)
+                .putBoolean(KEY_FORECAST_INTRODUCED, true)
+                .apply()
+            return updated
+        }
+        return stored
+    }
 
     fun setDashboardSections(sections: Set<String>) {
-        prefs().edit().putStringSet(KEY_DASHBOARD_SECTIONS, sections).apply()
+        prefs().edit()
+            .putStringSet(KEY_DASHBOARD_SECTIONS, sections)
+            .putBoolean(KEY_FORECAST_INTRODUCED, true)
+            .apply()
     }
 
     /**
@@ -157,6 +189,16 @@ object FinancePreferences {
     fun restoreSmsLink(key: String): Set<String> {
         val updated = dismissedSmsLinks() - key
         prefs().edit().putStringSet(KEY_DISMISSED_SMS_LINKS, updated).apply()
+        return updated
+    }
+
+    /** Transaction pairs the user has said are not duplicates, keyed by DuplicateDetector.pairKey. */
+    fun dismissedDuplicates(): Set<String> =
+        prefs().getStringSet(KEY_DISMISSED_DUPLICATES, emptySet())?.toSet() ?: emptySet()
+
+    fun dismissDuplicate(key: String): Set<String> {
+        val updated = dismissedDuplicates() + key
+        prefs().edit().putStringSet(KEY_DISMISSED_DUPLICATES, updated).apply()
         return updated
     }
 

@@ -266,6 +266,70 @@ class FinanceRepository(
         AccountLedger.amend(dao, oldTransaction, newTransaction)
     }
 
+    /**
+     * Repairs SMS-logged transactions whose payee the parser missed, and the alerts behind them.
+     *
+     * Kotak's "Sent Rs.X from Kotak Bank A/c X1234 to SHRI SAI VENUE PARKI on 07-11-26" was read
+     * with a one-word payee pattern, so any name with a space came out empty: the alert had no
+     * counterparty, the transaction's title fell back to the account name ("Kotak") and its
+     * merchant to the SMS sender id. The parser is fixed; this re-reads each approved alert with
+     * no counterparty and fills in what it now finds.
+     *
+     * Only the title and merchant change, and the title only where it is still the untouched
+     * fallback — a title the user typed is left alone. Amounts, accounts and dates are never
+     * touched, so no balance moves. Returns how many transactions were updated.
+     */
+    suspend fun backfillSmsPayees(): Int = dao.atomically {
+        var updated = 0
+        dao.getSmsTransactionsList()
+            .filter { it.isApproved && it.counterparty.isBlank() && it.loggedTransactionId > 0L && it.body.isNotBlank() }
+            .forEach { sms ->
+                val payee = SmsParser.parse(sms.sender, sms.body)?.counterparty?.takeIf { it.isNotBlank() } ?: return@forEach
+                dao.updateSmsTransaction(sms.copy(counterparty = payee, updatedAt = now()))
+                val tx = dao.getTransactionById(sms.loggedTransactionId) ?: return@forEach
+                val titleIsFallback = tx.note.isBlank() || tx.note == sms.accountName
+                val merchantIsFallback = tx.merchantName.isNullOrBlank() || tx.merchantName == sms.sender
+                if (!titleIsFallback && !merchantIsFallback) return@forEach
+                dao.updateTransaction(
+                    tx.copy(
+                        note = if (titleIsFallback) payee else tx.note,
+                        merchantName = if (merchantIsFallback) payee else tx.merchantName,
+                        updatedAt = now()
+                    )
+                )
+                updated++
+            }
+        updated
+    }
+
+    /**
+     * Rewrites balance adjustments stored with a negative amount — from before
+     * [postBalanceAdjustment] took a signed delta — into the shape it writes today: a positive
+     * amount landing on the destination side with no source account.
+     *
+     * Such a row (source = A, no destination, amount −X) already credits A by X, because a
+     * source-side TRANSFER subtracts its amount; the rewrite (source 0, destination A, amount X)
+     * credits A by exactly the same X as an incoming transfer. No balance moves — the point is
+     * that the row stops displaying as a negative transfer out. Returns how many were rewritten.
+     */
+    suspend fun normalizeNegativeAdjustments(): Int = dao.atomically {
+        var fixed = 0
+        dao.getTransactionsList()
+            .filter { it.type == TransactionType.TRANSFER && it.amount < 0.0 && it.destinationAccountId == null && it.sourceAccountId > 0L }
+            .forEach { row ->
+                dao.updateTransaction(
+                    row.copy(
+                        amount = -row.amount,
+                        sourceAccountId = 0L,
+                        destinationAccountId = row.sourceAccountId,
+                        updatedAt = now()
+                    )
+                )
+                fixed++
+            }
+        fixed
+    }
+
     suspend fun deleteTransaction(transaction: Transaction) = dao.atomically {
         AccountLedger.revoke(dao, transaction)
         tombstone(SyncTables.TRANSACTIONS, transaction.id)
@@ -430,6 +494,37 @@ class FinanceRepository(
     suspend fun updateDebt(debt: Debt) = dao.updateDebt(debt.copy(updatedAt = now()))
 
     /**
+     * Opens an IOU and moves [accountId] by its principal, as one unit: lending takes the money
+     * out, borrowing puts it in. The movement is a balance adjustment, not an expense or income —
+     * money lent is still the user's, so it must not land in an envelope's spending. Returns the
+     * new debt's id.
+     */
+    suspend fun openIou(debt: Debt, accountId: Long): Long = dao.atomically {
+        val ledgerId = postBalanceAdjustment(
+            accountId = accountId,
+            delta = if (debt.type == DebtType.BORROWED) debt.amount else -debt.amount,
+            note = if (debt.type == DebtType.LENT) "Lent to ${debt.personName}" else "Borrowed from ${debt.personName}",
+            date = debt.date
+        )
+        // Kept on the debt so deleting it can undo exactly this movement.
+        insertDebt(debt.copy(ledgerTransactionId = ledgerId))
+    }
+
+    /**
+     * The ledger row deleting [debt] would revoke, or null if deleting it leaves balances alone.
+     *
+     * Only an IOU that moved money when it was opened, and that nothing has been repaid on, gives
+     * its money back. Once a repayment is recorded, that money really came back into an account,
+     * so deleting is a write-off or a clean-up, not an undo: reversing the principal then would
+     * leave the account richer than it ever was. A missing row means the user already deleted the
+     * movement from the log themselves, and refunding again would count it twice.
+     */
+    suspend fun refundOnDelete(debt: Debt): Transaction? {
+        if (debt.ledgerTransactionId <= 0L || debt.paidAmount > Money.EPSILON) return null
+        return dao.getTransactionById(debt.ledgerTransactionId)
+    }
+
+    /**
      * Records a repayment against [debt] and moves the account with it, as one unit. Returns the
      * id of the ledger row so a caller that may have to undo the whole thing can hold on to it.
      *
@@ -451,6 +546,10 @@ class FinanceRepository(
         }
 
     suspend fun deleteDebt(debt: Debt) = dao.atomically {
+        refundOnDelete(debt)?.let { movement ->
+            AccountLedger.revoke(dao, movement)
+            tombstone(SyncTables.TRANSACTIONS, movement.id)
+        }
         dao.deleteDebt(debt)
         tombstone(SyncTables.DEBTS, debt.id)
     }

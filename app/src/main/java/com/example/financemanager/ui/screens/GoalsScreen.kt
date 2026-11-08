@@ -1,11 +1,7 @@
 package com.example.financemanager.ui.screens
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -33,6 +29,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -47,7 +44,10 @@ import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.IosCardStyle
 import com.example.financemanager.ui.components.IosButton
 import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosTopAppBar
 import com.example.financemanager.ui.components.moneyString
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
+import com.example.financemanager.ui.components.tabBarAwareInsets
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -88,10 +88,15 @@ fun GoalsScreen(
     val totalTarget = goals.sumOf { it.targetAmount }
 
     Box(modifier = Modifier.fillMaxSize()) {
+        val titleBehavior = rememberLargeTitleBehavior()
         Scaffold(
+            modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
+            // The tab bar floats over this screen.
+            contentWindowInsets = tabBarAwareInsets(),
             topBar = {
-                TopAppBar(
-                    title = { Text("Savings Goals", style = Typography.titleLarge.copy(color = TextPrimary)) },
+                IosTopAppBar(
+                    title = "Savings Goals",
+                    scrollBehavior = titleBehavior,
                     navigationIcon = {
                         if (showBackButton) {
                             IconButton(onClick = onNavigateBack) {
@@ -103,8 +108,7 @@ fun GoalsScreen(
                         IconButton(onClick = { showAddDialog = true }) {
                             Icon(Icons.Default.Add, contentDescription = "Add Goal", tint = AccentGreen)
                         }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                    }
                 )
             },
             containerColor = DeepBackground
@@ -112,8 +116,11 @@ fun GoalsScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues)
+                    // Only the top inset is a hard edge; the bottom one goes into contentPadding so
+                    // the list runs on beneath the translucent tab bar.
+                    .padding(top = paddingValues.calculateTopPadding())
                     .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding()),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
             // Summary card
@@ -284,16 +291,17 @@ fun GoalProgressRing(
         label = "goalProgress"
     )
     val isComplete = progress >= 1f
-    val infiniteTransition = rememberInfiniteTransition(label = "glowTransition")
-    val glowAlpha = infiniteTransition.animateFloat(
-        initialValue = 0.3f,
-        targetValue = 0.7f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1500),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "glowAlpha"
-    )
+    // A few breaths to celebrate, then a steady glow. Pulsing forever kept the whole Goals tab
+    // redrawing at the display's refresh rate for as long as any finished goal was on screen.
+    val glowAlpha = remember { Animatable(0.5f) }
+    LaunchedEffect(isComplete) {
+        if (!isComplete) return@LaunchedEffect
+        repeat(3) {
+            glowAlpha.animateTo(0.7f, tween(750))
+            glowAlpha.animateTo(0.3f, tween(750))
+        }
+        glowAlpha.animateTo(0.5f, tween(750))
+    }
 
     Canvas(modifier = modifier) {
         val stroke = Stroke(width = strokeWidth, cap = StrokeCap.Round)
@@ -340,11 +348,7 @@ private fun GoalCard(
     onCelebrate: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val color = try {
-        Color(android.graphics.Color.parseColor(goal.colorHex))
-    } catch (e: Exception) {
-        AccentGreen
-    }
+    val color = paletteTone(goal.colorHex)
     val progress = if (goal.targetAmount > 0) (goal.savedAmount / goal.targetAmount).toFloat() else 0f
     val isComplete = progress >= 1f
 
@@ -396,7 +400,7 @@ private fun GoalCard(
                         style = Typography.bodyMedium.copy(color = TextSecondary)
                     )
                     goal.targetDate?.let { date ->
-                        val formatted = SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(date))
+                        val formatted = com.example.financemanager.ui.components.formatDate(date, "dd MMM yyyy")
                         val daysLeft = ((date - System.currentTimeMillis()) / (24L * 60 * 60 * 1000)).toInt()
                         Text(
                             if (daysLeft >= 0) "By $formatted • $daysLeft days left" else "Was due $formatted",
@@ -517,10 +521,10 @@ private fun AddGoalDialog(
                             modifier = Modifier
                                 .size(42.dp)
                                 .clip(CircleShape)
-                                .background(if (isSelected) Color(android.graphics.Color.parseColor(selectedColor)).copy(alpha = 0.25f) else DarkSurface)
+                                .background(if (isSelected) paletteWash(selectedColor) else DarkSurface)
                                 .border(
                                     1.dp,
-                                    if (isSelected) Color(android.graphics.Color.parseColor(selectedColor)) else BorderColor,
+                                    if (isSelected) paletteTone(selectedColor) else BorderColor,
                                     CircleShape
                                 )
                                 .clickable { selectedIcon = icon },
@@ -529,7 +533,7 @@ private fun AddGoalDialog(
                             Icon(
                                 getGoalIcon(icon),
                                 contentDescription = icon,
-                                tint = if (isSelected) Color(android.graphics.Color.parseColor(selectedColor)) else TextSecondary,
+                                tint = if (isSelected) paletteTone(selectedColor) else TextSecondary,
                                 modifier = Modifier.size(20.dp)
                             )
                         }
@@ -539,7 +543,7 @@ private fun AddGoalDialog(
                 Text("Color", style = Typography.labelMedium.copy(color = TextSecondary))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     goalColorOptions.forEach { hex ->
-                        val c = Color(android.graphics.Color.parseColor(hex))
+                        val c = paletteTone(hex)
                         Box(
                             modifier = Modifier
                                 .size(32.dp)
@@ -562,7 +566,7 @@ private fun AddGoalDialog(
                     Icon(Icons.Default.CalendarMonth, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
-                        targetDate?.let { SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(it)) }
+                        targetDate?.let { com.example.financemanager.ui.components.formatDate(it, "dd MMM yyyy") }
                             ?: "Target date (optional)",
                         color = TextPrimary
                     )

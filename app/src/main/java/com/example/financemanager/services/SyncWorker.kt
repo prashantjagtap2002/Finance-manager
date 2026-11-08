@@ -15,6 +15,7 @@ import com.example.financemanager.domain.MergePlan
 import com.example.financemanager.domain.planMerge
 import com.example.financemanager.data.FinanceDatabase
 import com.example.financemanager.data.remote.*
+import io.github.jan.supabase.postgrest.exception.PostgrestRestException
 import io.github.jan.supabase.postgrest.postgrest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -34,6 +35,46 @@ class SyncWorker(
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
+        /**
+         * Carried by every sync request — the periodic one, the change-triggered one and Sync Now —
+         * so Settings can tell when any of them is running. It used to ask only the periodic job,
+         * which sits in ENQUEUED while it retries, so a sync that had been failing since the day
+         * before still read "Automatic sync is enabled".
+         */
+        const val TAG = "cloud-sync"
+
+        /** When a sync last finished with no table in error, or 0 if none has on this install. */
+        fun lastSuccessAt(context: Context): Long =
+            context.getSharedPreferences("sync_state", Context.MODE_PRIVATE)
+                .getLong("last_success_at", 0L)
+
+        /**
+         * When a sync last ended in error, or 0. Compared against [lastSuccessAt] rather than read
+         * off WorkManager: a job's attempt count stays up after some *other* job has succeeded.
+         */
+        fun lastFailureAt(context: Context): Long =
+            context.getSharedPreferences("sync_state", Context.MODE_PRIVATE)
+                .getLong("last_failure_at", 0L)
+
+        /** Why the last failed sync failed: one of the FAILURE_* values, or null. */
+        fun lastFailureReason(context: Context): String? =
+            context.getSharedPreferences("sync_state", Context.MODE_PRIVATE)
+                .getString("last_failure_reason", null)
+
+        /** No usable session: the refresh is failing or sign-in could not be reached. Transient. */
+        const val FAILURE_SIGN_IN = "sign_in"
+
+        /**
+         * The cloud refused writes to rows that exist under another user id (Postgres 42501, an
+         * RLS policy). This device's rows were uploaded by an earlier anonymous identity, so no
+         * amount of retrying helps — the rows have to be re-owned on the server. See
+         * [ensureSignedIn][com.example.financemanager.data.remote.SupabaseManager.ensureSignedIn]
+         * for how the identity used to get replaced.
+         */
+        const val FAILURE_OWNERSHIP = "ownership"
+
+        const val FAILURE_OTHER = "other"
+
         /** How many ids one delete request may carry. See [deleteRows]. */
         private const val DELETE_CHUNK_SIZE = 200
 
@@ -48,6 +89,7 @@ class SyncWorker(
 
         fun enqueueNow(context: Context) {
             val request = OneTimeWorkRequestBuilder<SyncWorker>()
+                .addTag(TAG)
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
                 .build()
             WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
@@ -142,6 +184,31 @@ class SyncWorker(
         }
     }
 
+    private fun recordFailure(reason: String) {
+        applicationContext.getSharedPreferences("sync_state", Context.MODE_PRIVATE)
+            .edit()
+            .putLong("last_failure_at", System.currentTimeMillis())
+            .putString("last_failure_reason", reason)
+            .apply()
+    }
+
+    /**
+     * Remembers which cloud user this device syncs as, and logs loudly if that changes. A changed
+     * id means an earlier anonymous identity was lost, and its rows need re-owning on the server;
+     * the previous id is kept so that can be done without guessing which user it was.
+     */
+    private fun trackCloudUser(userId: String) {
+        val prefs = applicationContext.getSharedPreferences("sync_state", Context.MODE_PRIVATE)
+        val known = prefs.getString("cloud_user_id", null)
+        if (known == userId) return
+        val edit = prefs.edit().putString("cloud_user_id", userId)
+        if (known != null) {
+            Log.e("SyncWorker", "Cloud identity changed from $known to $userId; rows owned by $known are now unreachable")
+            edit.putString("previous_cloud_user_id", known)
+        }
+        edit.apply()
+    }
+
     override suspend fun doWork(): Result {
         // Prevent concurrent sync executions
         if (!syncInProgress.compareAndSet(false, true)) {
@@ -156,11 +223,19 @@ class SyncWorker(
             }
 
             Log.d("SyncWorker", "Starting cloud sync...")
-            val userId = SupabaseManager.ensureSignedIn()
-            if (userId == null) {
-                Log.w("SyncWorker", "Supabase not configured or sign-in failed. Aborting sync.")
+            if (!SupabaseManager.isConfigured) {
+                Log.w("SyncWorker", "Supabase is not configured. Aborting sync.")
                 return Result.failure()
             }
+            val userId = SupabaseManager.ensureSignedIn()
+            if (userId == null) {
+                Log.w("SyncWorker", "No usable cloud session yet. Will retry.")
+                // Recorded like any other failure, or Settings keeps showing the last success.
+                // Retried rather than failed: a session that is failing to refresh comes back.
+                recordFailure(FAILURE_SIGN_IN)
+                return Result.retry()
+            }
+            trackCloudUser(userId)
 
             val db = FinanceDatabase.getDatabase(applicationContext)
             val dao = db.dao()
@@ -358,7 +433,11 @@ class SyncWorker(
                                 "updatedat"
                             )
                         },
-                        apply = { dao.insertDebt(it.toEntity()) }
+                        // The link is local only, so a pulled row keeps the one this device holds.
+                        apply = { remoteDebt ->
+                            val linked = local.firstOrNull { it.id == remoteDebt.id }?.ledgerTransactionId ?: 0L
+                            dao.insertDebt(remoteDebt.toEntity().copy(ledgerTransactionId = linked))
+                        }
                     )
                 },
                 syncTable("sms_transactions") {
@@ -420,13 +499,24 @@ class SyncWorker(
 
             return if (errors.isEmpty()) {
                 Log.d("SyncWorker", "Cloud sync complete!")
+                applicationContext.getSharedPreferences("sync_state", Context.MODE_PRIVATE)
+                    .edit().putLong("last_success_at", System.currentTimeMillis()).apply()
                 Result.success()
             } else {
                 Log.e("SyncWorker", "Cloud sync completed with ${errors.size} error(s)")
                 errors.forEach { error ->
                     Log.e("SyncWorker", "Sync error: ${error.message}", error)
                 }
-                Result.retry()
+                val ownership = errors.any { it is PostgrestRestException && it.code == "42501" }
+                if (ownership) {
+                    recordFailure(FAILURE_OWNERSHIP)
+                    // Retrying cannot fix rows owned by another user, so don't back off and
+                    // hammer the server; a periodic job still runs again next period.
+                    Result.failure()
+                } else {
+                    recordFailure(FAILURE_OTHER)
+                    Result.retry()
+                }
             }
         } finally {
             syncInProgress.set(false)

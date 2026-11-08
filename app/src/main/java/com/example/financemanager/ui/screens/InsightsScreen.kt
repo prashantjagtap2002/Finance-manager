@@ -1,5 +1,6 @@
 package com.example.financemanager.ui.screens
 
+import com.example.financemanager.ui.components.formatDate
 import android.widget.Toast
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -21,6 +22,17 @@ import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Lightbulb
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
+import com.example.financemanager.core.FinancePreferences
+import com.example.financemanager.core.InsightLayout
+import com.example.financemanager.core.InsightLayoutStore
+import com.example.financemanager.core.InsightSection
+import com.example.financemanager.core.resolvedInsightOrder
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.animation.core.EaseOutCubic
 import androidx.compose.animation.core.Spring
@@ -37,6 +49,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -62,12 +75,20 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.financemanager.data.Account
+import com.example.financemanager.data.Category
+import com.example.financemanager.data.Transaction
 import com.example.financemanager.data.TransactionType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.financemanager.theme.*
 import com.example.financemanager.theme.Typography
 import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.IosCardStyle
+import com.example.financemanager.ui.components.IosTopAppBar
 import com.example.financemanager.ui.components.VerticalBar
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
+import com.example.financemanager.ui.components.tabBarAwareInsets
 import com.example.financemanager.ui.components.rememberBarFraction
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
@@ -81,7 +102,10 @@ import java.util.Locale
 import java.util.TimeZone
 
 enum class DynamicDateFilter(val label: String) {
-    THIS_CYCLE("This Cycle"),
+    YESTERDAY("Yesterday"),
+    THIS_WEEK("This Week"),
+    // Was labelled "This Cycle", but it has always been the calendar month.
+    THIS_MONTH("This Month"),
     LAST_MONTH("Last Month"),
     LAST_3_MONTHS("Last 3 Months"),
     YTD("Year to Date"),
@@ -112,11 +136,12 @@ private fun utcToLocalEndOfDay(utcMillis: Long): Long {
     return localCal.timeInMillis
 }
 
-private fun computeDynamicDateRange(
+internal fun computeDynamicDateRange(
     filterType: DynamicDateFilter,
     periodOffset: Int,
     customStart: Long?,
-    customEnd: Long?
+    customEnd: Long?,
+    now: Long = System.currentTimeMillis()
 ): Pair<Long, Long> {
     val cal = Calendar.getInstance()
     fun startOfDay(millis: Long): Long {
@@ -132,10 +157,28 @@ private fun computeDynamicDateRange(
         return cal.timeInMillis
     }
     
-    val now = System.currentTimeMillis()
     
     return when (filterType) {
-        DynamicDateFilter.THIS_CYCLE -> {
+        DynamicDateFilter.YESTERDAY -> {
+            // Offset steps a day at a time: back from yesterday, forward no further than it.
+            cal.timeInMillis = now
+            cal.add(Calendar.DAY_OF_MONTH, -1 + periodOffset)
+            startOfDay(cal.timeInMillis) to endOfDay(cal.timeInMillis)
+        }
+        DynamicDateFilter.THIS_WEEK -> {
+            // Monday to Sunday, whatever the device locale's first day of the week.
+            cal.timeInMillis = now
+            val sinceMonday = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7
+            cal.add(Calendar.DAY_OF_MONTH, -sinceMonday + periodOffset * 7)
+            val start = startOfDay(cal.timeInMillis)
+            if (periodOffset == 0) {
+                start to endOfDay(now)
+            } else {
+                cal.add(Calendar.DAY_OF_MONTH, 6)
+                start to endOfDay(cal.timeInMillis)
+            }
+        }
+        DynamicDateFilter.THIS_MONTH -> {
             cal.timeInMillis = now
             cal.add(Calendar.MONTH, periodOffset)
             cal.set(Calendar.DAY_OF_MONTH, 1)
@@ -190,6 +233,7 @@ fun InsightsScreen(
     onNavigateBack: () -> Unit,
     onNavigateToCategory: (Long, String, String) -> Unit,
     onNavigateToCustomInsight: () -> Unit = {},
+    onNavigateToCalendar: () -> Unit = {},
     showBackButton: Boolean = true
 ) {
     val context = LocalContext.current
@@ -201,7 +245,10 @@ fun InsightsScreen(
     val streakDays by viewModel.streakDays.collectAsStateWithLifecycle()
     val goals by viewModel.savingsGoals.collectAsStateWithLifecycle()
 
-    var currentFilterType by remember { mutableStateOf(DynamicDateFilter.THIS_CYCLE) }
+    var currentFilterType by remember { mutableStateOf(DynamicDateFilter.THIS_MONTH) }
+    val insightLayout by InsightLayoutStore.layout.collectAsStateWithLifecycle()
+    val sectionOrder = remember(insightLayout) { resolvedInsightOrder(insightLayout) }
+    var showArrangeSheet by remember { mutableStateOf(false) }
     var periodOffset by remember { mutableIntStateOf(0) }
     var customRangeStart by remember { mutableStateOf<Long?>(null) }
     var customRangeEnd by remember { mutableStateOf<Long?>(null) }
@@ -233,106 +280,47 @@ fun InsightsScreen(
         }
     }
 
-    // Expenses for the full period trend (bar graph)
-    val periodExpenses = remember(transactions, rangeStart, rangeEnd) {
-        transactions.filter { it.type == TransactionType.EXPENSE && it.date in rangeStart..rangeEnd }
-    }
-
-    // Everything on this page is scoped to [effectiveStart, effectiveEnd] (either single selected day or full period)
-    val filteredTransactions = remember(transactions, effectiveStart, effectiveEnd) {
-        transactions.filter { it.date in effectiveStart..effectiveEnd }
-    }
-    val filteredExpenses = filteredTransactions.filter { it.type == TransactionType.EXPENSE }
-    val filteredIncome = filteredTransactions.filter { it.type == TransactionType.INCOME }.sumOf { it.amount }
-    val totalExpense = filteredExpenses.sumOf { it.amount }
-
-    // 1. Category breakdown (drives the donut chart)
-    val defaultColor = TextPrimary
-    val palette = ChartPalette
-    val categoryBreakdown = remember(filteredExpenses, categories, defaultColor, palette) {
-        val map = mutableMapOf<Long, Double>()
-        filteredExpenses.forEach {
-            map[it.categoryId] = (map[it.categoryId] ?: 0.0) + it.amount
-        }
-
-        val shares = map.mapNotNull { entry ->
-            val cat = categories.firstOrNull { it.id == entry.key } ?: return@mapNotNull null
-            CategoryShare(
-                categoryId = cat.id,
-                name = cat.name,
-                amount = entry.value,
-                color = defaultColor // Temporary, will be assigned below
+    // Everything below walks the whole ledger: several filters, group-bys and a day-name format
+    // per expense. Done in composition, that ran on the main thread in the very frame the screen
+    // was opened, so the navigation transition started late and stuttered. It runs on a
+    // background thread now; while a new period computes, the previous one stays on screen.
+    // Privacy is a key too: the narrative lines format amounts into plain strings here, so
+    // turning privacy mode on must recompute them, or "On track to save ₹12,345" stays readable.
+    val privacyKey = FinancePreferences.privacyMode
+    val stats by produceState<InsightsStats?>(
+        initialValue = null,
+        transactions, categories, accounts, rangeStart, rangeEnd, effectiveStart, effectiveEnd, privacyKey
+    ) {
+        value = withContext(Dispatchers.Default) {
+            computeInsightsStats(
+                transactions, categories, accounts, rangeStart, rangeEnd, effectiveStart, effectiveEnd
             )
-        }.sortedByDescending { it.amount }
-
-        // Assign palette colors by rank
-        shares.mapIndexed { index, share ->
-            share.copy(color = palette[index % palette.size])
         }
     }
+    val current = stats ?: InsightsStats.Empty
+    // Expenses for the full period trend (bar graph)
+    val periodExpenses = current.periodExpenses
+    // Everything else on this page is scoped to [effectiveStart, effectiveEnd] (either single selected day or full period)
+    val filteredExpenses = current.filteredExpenses
+    val filteredIncome = current.filteredIncome
+    val totalExpense = current.totalExpense
+    val peakDayAndCategory = current.peakDayAndCategory
+    val narrativeInsights = current.narrative
+    val currentBalance = current.currentBalance
+    val forecastEndBalance = current.forecastEndBalance
 
-    // 2. Peak spending day & category, within the selected range
-    val peakDayAndCategory = remember(filteredExpenses, categories) {
-        if (filteredExpenses.isEmpty()) Pair("None", "None")
-        else {
-            val dayFormatter = SimpleDateFormat("EEEE", Locale.getDefault())
-            val dayGroups = filteredExpenses.groupBy { dayFormatter.format(Date(it.date)) }
-            val peakDay = dayGroups.maxByOrNull { it.value.sumOf { t -> t.amount } }?.key ?: "None"
-
-            val catGroups = filteredExpenses.groupBy { it.categoryId }
-            val peakCatId = catGroups.maxByOrNull { it.value.sumOf { t -> t.amount } }?.key
-            val peakCategory = categories.firstOrNull { it.id == peakCatId }?.name ?: "None"
-            Pair(peakDay, peakCategory)
+    // 1. Category breakdown (drives the donut chart). Palette colors depend on the theme, so they
+    // are assigned here, by rank, rather than in the background computation.
+    val palette = ChartPalette
+    val categoryBreakdown = remember(current.categoryTotals, palette) {
+        current.categoryTotals.mapIndexed { index, (category, amount) ->
+            CategoryShare(
+                categoryId = category.id,
+                name = category.name,
+                amount = amount,
+                color = palette[index % palette.size]
+            )
         }
-    }
-
-    // 3. Narrative comparison: selected period vs. the immediately preceding period of equal length
-    val narrativeInsights = remember(transactions, categories, rangeStart, rangeEnd) {
-        val periodLength = rangeEnd - rangeStart + 1
-        val prevStart = rangeStart - periodLength
-        val prevEnd = rangeStart - 1
-
-        val curExpensesLocal = transactions.filter { it.type == TransactionType.EXPENSE && it.date in rangeStart..rangeEnd }
-        val prevExpenses = transactions.filter { it.type == TransactionType.EXPENSE && it.date in prevStart..prevEnd }
-        val curIncomeLocal = transactions.filter { it.type == TransactionType.INCOME && it.date in rangeStart..rangeEnd }.sumOf { it.amount }
-
-        val curTotal = curExpensesLocal.sumOf { it.amount }
-        val prevTotal = prevExpenses.sumOf { it.amount }
-
-        val lines = mutableListOf<Pair<String, Boolean>>() // text to isPositive
-        if (prevTotal > 0 && curTotal > 0) {
-            val changePct = ((curTotal - prevTotal) / prevTotal * 100).toInt()
-            when {
-                changePct > 5 -> lines.add("You've spent $changePct% more than the previous period." to false)
-                changePct < -5 -> lines.add("Nice! Spending is ${-changePct}% lower than the previous period." to true)
-                else -> lines.add("Your spending is on par with the previous period." to true)
-            }
-
-            // Biggest category swing
-            val curByCat = curExpensesLocal.groupBy { it.categoryId }.mapValues { it.value.sumOf { t -> t.amount } }
-            val prevByCat = prevExpenses.groupBy { it.categoryId }.mapValues { it.value.sumOf { t -> t.amount } }
-            val biggestJump = curByCat
-                .mapNotNull { (catId, cur) ->
-                    val prev = prevByCat[catId] ?: 0.0
-                    if (prev > 0 && cur > prev * 1.2) {
-                        val cat = categories.firstOrNull { it.id == catId } ?: return@mapNotNull null
-                        Triple(cat.name, ((cur - prev) / prev * 100).toInt(), cur - prev)
-                    } else null
-                }
-                .maxByOrNull { it.third }
-            biggestJump?.let { (name, pct, _) ->
-                lines.add("$name is up $pct% vs the previous period — worth a look." to false)
-            }
-        }
-        if (curIncomeLocal > 0) {
-            val net = curIncomeLocal - curTotal
-            if (net > 0) {
-                lines.add("On track to save ${moneyString(net)} this period." to true)
-            } else {
-                lines.add("You're ${moneyString(-net)} over your income this period." to false)
-            }
-        }
-        lines
     }
 
     // 4. Achievements are lifetime milestones, intentionally not scoped to the date filter
@@ -346,16 +334,6 @@ fun InsightsScreen(
         )
     }
 
-    // 5. Cash flow forecast to the end of the selected period
-    val currentBalance = accounts.sumOf { it.balance }
-    val forecastEndBalance = remember(currentBalance, filteredExpenses, rangeStart, rangeEnd) {
-        val now = System.currentTimeMillis()
-        val dayMs = 24L * 60 * 60 * 1000
-        val elapsedDays = ((minOf(now, rangeEnd) - rangeStart + 1).coerceAtLeast(dayMs)) / dayMs.toDouble()
-        val avgDailyBurn = filteredExpenses.sumOf { it.amount } / elapsedDays
-        val remainingDays = (rangeEnd - maxOf(now, rangeStart)).coerceAtLeast(0) / dayMs.toDouble()
-        maxOf(0.0, currentBalance - avgDailyBurn * remainingDays)
-    }
     val periodIsInFuture = rangeEnd > System.currentTimeMillis()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -368,11 +346,16 @@ fun InsightsScreen(
         }
     }
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
+        // The tab bar floats over this screen; snackbars sit above it.
+        contentWindowInsets = tabBarAwareInsets(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = { Text("Reports & Insights", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = "Reports & Insights",
+                scrollBehavior = titleBehavior,
                 navigationIcon = {
                     if (showBackButton) {
                         IconButton(onClick = onNavigateBack) {
@@ -381,6 +364,12 @@ fun InsightsScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onNavigateToCalendar) {
+                        Icon(Icons.Default.CalendarMonth, contentDescription = "Spending calendar", tint = PrimaryViolet)
+                    }
+                    IconButton(onClick = { showArrangeSheet = true }) {
+                        Icon(Icons.Default.SwapVert, contentDescription = "Arrange charts", tint = PrimaryViolet)
+                    }
                     IconButton(onClick = onNavigateToCustomInsight) {
                         Icon(Icons.Default.Add, contentDescription = "Create custom insight", tint = PrimaryViolet)
                     }
@@ -399,8 +388,7 @@ fun InsightsScreen(
                     }) {
                         Icon(Icons.Default.FileDownload, contentDescription = "Export Report", tint = SecondaryTeal)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                }
             )
         },
         containerColor = DeepBackground
@@ -408,7 +396,9 @@ fun InsightsScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
+                // Only the top inset is a hard edge; the bottom one goes into the list's
+                // contentPadding so it runs on beneath the translucent tab bar.
+                .padding(top = paddingValues.calculateTopPadding())
         ) {
             // Dynamic Date Range Filter Pills
             Row(
@@ -464,6 +454,7 @@ fun InsightsScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding()),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 // Header showing selected date range with period navigation chevrons
@@ -473,11 +464,10 @@ fun InsightsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val dayFmt = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
                         val dateText = if (selectedDayTimestamp != null) {
-                            "${dayFmt.format(Date(selectedDayTimestamp!!))} (Single Day)"
+                            "${formatDate(selectedDayTimestamp!!, "MMM d, yyyy")} (Single Day)"
                         } else {
-                            "${dayFmt.format(Date(rangeStart))} – ${dayFmt.format(Date(rangeEnd))}"
+                            "${formatDate(rangeStart, "MMM d, yyyy")} – ${formatDate(rangeEnd, "MMM d, yyyy")}"
                         }
                         
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -554,8 +544,11 @@ fun InsightsScreen(
                     }
                 }
                 
+                // Every section below is keyed so the user can put it anywhere (Arrange, in the
+                // top bar). Charts pinned from Create Insight sit in the same order as "custom:<id>".
+                val sectionContent = mapOf<String, @Composable () -> Unit>(
                 // 0. Bar Chart Card (Supports horizontal swipe left/right to navigate periods)
-                item {
+                "daily_bars" to {
                     var totalDragAmount by remember { mutableFloatStateOf(0f) }
                     IosCard(
                         modifier = Modifier
@@ -604,10 +597,10 @@ fun InsightsScreen(
                             )
                         }
                     }
-                }
+                },
                 
                 // 0.5. Daily Amount Line Graph (straight lines, tap a point to read the amount)
-                item {
+                "daily_line" to {
                     IosCard(
                         modifier = Modifier.fillMaxWidth(),
                         style = IosCardStyle.Grouped
@@ -622,10 +615,10 @@ fun InsightsScreen(
                             )
                         }
                     }
-                }
+                },
 
                 // 1. Donut Chart Card
-                item {
+                "category_donut" to {
                     IosCard(
                         modifier = Modifier.fillMaxWidth(),
                         style = IosCardStyle.Grouped
@@ -692,7 +685,9 @@ fun InsightsScreen(
                                                         maxLines = 1
                                                     )
                                                     Text(
-                                                        "${moneyString(item.amount)} (${percent.toInt()}%)",
+                                                        // Rounded, with "<1%" for a real but tiny share: truncating showed ₹80 of
+                                                        // ₹10,525 as "0%", as if the category had nothing in it.
+                                                        "${moneyString(item.amount)} (${if (percent > 0.0 && percent < 0.5) "<1" else kotlin.math.round(percent).toInt().toString()}%)",
                                                         style = TextStyle(color = TextSecondary, fontSize = 10.sp)
                                                     )
                                                 }
@@ -703,10 +698,10 @@ fun InsightsScreen(
                             }
                         }
                     }
-                }
+                },
 
                 // 1.5. Income vs. Expense Comparison Chart Card
-                item {
+                "income_vs_expense" to {
                     IosCard(
                         modifier = Modifier.fillMaxWidth(),
                         style = IosCardStyle.Grouped
@@ -718,10 +713,10 @@ fun InsightsScreen(
                             )
                         }
                     }
-                }
+                },
 
                 // 1.8. Cumulative Cash Flow Trajectory Curve Card
-                item {
+                "cumulative" to {
                     IosCard(
                         modifier = Modifier.fillMaxWidth(),
                         style = IosCardStyle.Grouped
@@ -734,10 +729,10 @@ fun InsightsScreen(
                             )
                         }
                     }
-                }
+                },
 
                 // 2. Key Insights Card
-                item {
+                "key_insights" to {
                     IosCard(
                         modifier = Modifier.fillMaxWidth(),
                         style = IosCardStyle.Grouped
@@ -785,10 +780,10 @@ fun InsightsScreen(
                             }
                         }
                     }
-                }
+                },
 
                 // 3. Achievements Card (lifetime milestones)
-                item {
+                "achievements" to {
                     IosCard(
                         modifier = Modifier.fillMaxWidth(),
                         style = IosCardStyle.Grouped
@@ -863,10 +858,10 @@ fun InsightsScreen(
                             }
                         }
                     }
-                }
+                },
 
                 // 4. Cash Flow Forecast (to the end of the selected period)
-                item {
+                "forecast" to {
                     IosCard(
                         modifier = Modifier.fillMaxWidth(),
                         style = IosCardStyle.Grouped
@@ -897,7 +892,7 @@ fun InsightsScreen(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    "by ${SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(rangeEnd))}",
+                                    "by ${formatDate(rangeEnd, "MMM d, yyyy")}",
                                     style = Typography.labelMedium.copy(color = TextMuted)
                                 )
                             } else {
@@ -914,12 +909,68 @@ fun InsightsScreen(
                         }
                     }
                 }
+                )
+
+                val visibleSections = sectionOrder.filterNot { it in insightLayout.hidden }
+                if (visibleSections.isEmpty()) {
+                    item {
+                        Text(
+                            "Every chart is hidden. Tap the arrange button at the top to bring some back.",
+                            style = Typography.bodyMedium.copy(color = TextMuted),
+                            modifier = Modifier.padding(vertical = 24.dp)
+                        )
+                    }
+                }
+                // Until the first background pass lands (a frame or two after opening) the
+                // sections would all read as empty; rendering nothing avoids flashing that.
+                if (stats != null) visibleSections.forEach { key ->
+                    item(key = key) {
+                        val builtIn = sectionContent[key]
+                        if (builtIn != null) {
+                            builtIn()
+                        } else {
+                            insightLayout.saved.firstOrNull { it.sectionKey == key }?.let { saved ->
+                                SavedInsightCard(
+                                    insight = saved,
+                                    transactions = transactions,
+                                    categories = categories,
+                                    privacy = FinancePreferences.privacyMode,
+                                    onRemove = {
+                                        InsightLayoutStore.removeSaved(context, saved.id)
+                                        notify("Removed from Insights")
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
 
                 item {
                     Spacer(modifier = Modifier.height(32.dp))
                 }
             }
         }
+    }
+
+    if (showArrangeSheet) {
+        ArrangeInsightsSheet(
+            order = sectionOrder,
+            layout = insightLayout,
+            categories = categories,
+            onMove = { key, delta ->
+                val next = sectionOrder.toMutableList()
+                val from = next.indexOf(key)
+                val to = from + delta
+                if (from >= 0 && to in next.indices) {
+                    next.add(to, next.removeAt(from))
+                    InsightLayoutStore.setOrder(context, next)
+                }
+            },
+            onToggleHidden = { key, hidden -> InsightLayoutStore.setHidden(context, key, hidden) },
+            onRemoveSaved = { id -> InsightLayoutStore.removeSaved(context, id) },
+            onReset = { InsightLayoutStore.reset(context) },
+            onDismiss = { showArrangeSheet = false }
+        )
     }
 
     if (showDatePicker) {
@@ -952,6 +1003,89 @@ fun InsightsScreen(
                 showModeToggle = false,
                 modifier = Modifier.weight(1f)
             )
+        }
+    }
+}
+
+/**
+ * Reorders the Insights page. Up/down rather than drag: every row is a fixed-size target, so it
+ * works one-handed and with TalkBack, and a move is one tap to undo.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ArrangeInsightsSheet(
+    order: List<String>,
+    layout: InsightLayout,
+    categories: List<com.example.financemanager.data.Category>,
+    onMove: (String, Int) -> Unit,
+    onToggleHidden: (String, Boolean) -> Unit,
+    onRemoveSaved: (String) -> Unit,
+    onReset: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    ModalBottomSheet(onDismissRequest = onDismiss, containerColor = DarkSurface) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Arrange charts", style = Typography.titleLarge.copy(color = TextPrimary))
+                    Text(
+                        "Move charts up or down, hide the ones you don't need.",
+                        style = Typography.labelMedium.copy(color = TextSecondary)
+                    )
+                }
+                TextButton(onClick = onReset) { Text("Reset", color = SecondaryTeal) }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+            LazyColumn(modifier = Modifier.heightIn(max = 520.dp)) {
+                items(order.size, key = { order[it] }) { index ->
+                    val key = order[index]
+                    val builtIn = InsightSection.entries.firstOrNull { it.key == key }
+                    val saved = layout.saved.firstOrNull { it.sectionKey == key }
+                    val hidden = key in layout.hidden
+                    val title = builtIn?.title ?: saved?.let { s ->
+                        val metric = InsightMetric.entries.firstOrNull { it.name == s.metric }?.label ?: s.metric
+                        val category = s.categoryId?.let { id -> categories.firstOrNull { it.id == id }?.name }
+                        metric + (category?.let { " · $it" } ?: "")
+                    } ?: key
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                title,
+                                style = Typography.bodyLarge.copy(color = if (hidden) TextMuted else TextPrimary),
+                                maxLines = 1
+                            )
+                            if (saved != null) {
+                                Text("Your chart", style = Typography.labelSmall.copy(color = SecondaryTeal))
+                            }
+                        }
+                        IconButton(onClick = { onMove(key, -1) }, enabled = index > 0) {
+                            Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Move $title up",
+                                tint = if (index > 0) TextPrimary else TextMuted)
+                        }
+                        IconButton(onClick = { onMove(key, 1) }, enabled = index < order.lastIndex) {
+                            Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Move $title down",
+                                tint = if (index < order.lastIndex) TextPrimary else TextMuted)
+                        }
+                        if (saved != null) {
+                            IconButton(onClick = { onRemoveSaved(saved.id) }) {
+                                Icon(Icons.Default.Delete, contentDescription = "Remove $title", tint = AlertRed)
+                            }
+                        } else {
+                            IconButton(onClick = { onToggleHidden(key, !hidden) }) {
+                                Icon(
+                                    if (hidden) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (hidden) "Show $title" else "Hide $title",
+                                    tint = if (hidden) TextMuted else AccentGreen
+                                )
+                            }
+                        }
+                    }
+                    if (index < order.lastIndex) HorizontalDivider(color = BorderColor)
+                }
+            }
         }
     }
 }
@@ -1032,6 +1166,133 @@ private fun InsightRow(
     }
 }
 
+/** The ledger-wide numbers behind the Insights page, computed off the main thread. */
+private class InsightsStats(
+    val periodExpenses: List<Transaction>,
+    val filteredExpenses: List<Transaction>,
+    val filteredIncome: Double,
+    val totalExpense: Double,
+    /** Expense total per category, largest first. */
+    val categoryTotals: List<Pair<Category, Double>>,
+    val peakDayAndCategory: Pair<String, String>,
+    /** Narrative lines, each paired with whether it is good news. */
+    val narrative: List<Pair<String, Boolean>>,
+    val currentBalance: Double,
+    val forecastEndBalance: Double
+) {
+    companion object {
+        val Empty = InsightsStats(
+            emptyList(), emptyList(), 0.0, 0.0, emptyList(), "None" to "None", emptyList(), 0.0, 0.0
+        )
+    }
+}
+
+private fun computeInsightsStats(
+    transactions: List<Transaction>,
+    categories: List<Category>,
+    accounts: List<Account>,
+    rangeStart: Long,
+    rangeEnd: Long,
+    effectiveStart: Long,
+    effectiveEnd: Long
+): InsightsStats {
+    val categoriesById = categories.associateBy { it.id }
+    val periodExpenses = transactions.filter { it.type == TransactionType.EXPENSE && it.date in rangeStart..rangeEnd }
+    val filteredTransactions = transactions.filter { it.date in effectiveStart..effectiveEnd }
+    val filteredExpenses = filteredTransactions.filter { it.type == TransactionType.EXPENSE }
+    val filteredIncome = filteredTransactions.filter { it.type == TransactionType.INCOME }.sumOf { it.amount }
+    val totalExpense = filteredExpenses.sumOf { it.amount }
+
+    val totalsByCategory = HashMap<Long, Double>()
+    filteredExpenses.forEach { totalsByCategory[it.categoryId] = (totalsByCategory[it.categoryId] ?: 0.0) + it.amount }
+    val categoryTotals = totalsByCategory
+        .mapNotNull { (id, amount) -> categoriesById[id]?.let { it to amount } }
+        .sortedByDescending { it.second }
+
+    // Peak spending day & category, within the selected range
+    val peakDayAndCategory = if (filteredExpenses.isEmpty()) {
+        "None" to "None"
+    } else {
+        val peakDay = filteredExpenses
+            .groupBy { formatDate(it.date, "EEEE") }
+            .maxByOrNull { it.value.sumOf { t -> t.amount } }?.key ?: "None"
+        val peakCatId = totalsByCategory.maxByOrNull { it.value }?.key
+        peakDay to (categoriesById[peakCatId]?.name ?: "None")
+    }
+
+    // Narrative comparison: selected period vs. the immediately preceding period of equal length
+    val narrative = run {
+        val periodLength = rangeEnd - rangeStart + 1
+        val prevStart = rangeStart - periodLength
+        val prevEnd = rangeStart - 1
+
+        val curExpensesLocal = periodExpenses
+        val prevExpenses = transactions.filter { it.type == TransactionType.EXPENSE && it.date in prevStart..prevEnd }
+        val curIncomeLocal = transactions.filter { it.type == TransactionType.INCOME && it.date in rangeStart..rangeEnd }.sumOf { it.amount }
+
+        val curTotal = curExpensesLocal.sumOf { it.amount }
+        val prevTotal = prevExpenses.sumOf { it.amount }
+
+        val lines = mutableListOf<Pair<String, Boolean>>() // text to isPositive
+        if (prevTotal > 0 && curTotal > 0) {
+            val changePct = ((curTotal - prevTotal) / prevTotal * 100).toInt()
+            when {
+                changePct > 5 -> lines.add("You've spent $changePct% more than the previous period." to false)
+                changePct < -5 -> lines.add("Nice! Spending is ${-changePct}% lower than the previous period." to true)
+                else -> lines.add("Your spending is on par with the previous period." to true)
+            }
+
+            // Biggest category swing
+            val curByCat = curExpensesLocal.groupBy { it.categoryId }.mapValues { it.value.sumOf { t -> t.amount } }
+            val prevByCat = prevExpenses.groupBy { it.categoryId }.mapValues { it.value.sumOf { t -> t.amount } }
+            val biggestJump = curByCat
+                .mapNotNull { (catId, cur) ->
+                    val prev = prevByCat[catId] ?: 0.0
+                    if (prev > 0 && cur > prev * 1.2) {
+                        val cat = categoriesById[catId] ?: return@mapNotNull null
+                        Triple(cat.name, ((cur - prev) / prev * 100).toInt(), cur - prev)
+                    } else null
+                }
+                .maxByOrNull { it.third }
+            biggestJump?.let { (name, pct, _) ->
+                lines.add("$name is up $pct% vs the previous period — worth a look." to false)
+            }
+        }
+        if (curIncomeLocal > 0) {
+            val net = curIncomeLocal - curTotal
+            if (net > 0) {
+                lines.add("On track to save ${moneyString(net)} this period." to true)
+            } else {
+                lines.add("You're ${moneyString(-net)} over your income this period." to false)
+            }
+        }
+        lines
+    }
+
+    // Cash flow forecast to the end of the selected period
+    val currentBalance = accounts.sumOf { it.balance }
+    val forecastEndBalance = run {
+        val now = System.currentTimeMillis()
+        val dayMs = 24L * 60 * 60 * 1000
+        val elapsedDays = ((minOf(now, rangeEnd) - rangeStart + 1).coerceAtLeast(dayMs)) / dayMs.toDouble()
+        val avgDailyBurn = totalExpense / elapsedDays
+        val remainingDays = (rangeEnd - maxOf(now, rangeStart)).coerceAtLeast(0) / dayMs.toDouble()
+        maxOf(0.0, currentBalance - avgDailyBurn * remainingDays)
+    }
+
+    return InsightsStats(
+        periodExpenses = periodExpenses,
+        filteredExpenses = filteredExpenses,
+        filteredIncome = filteredIncome,
+        totalExpense = totalExpense,
+        categoryTotals = categoryTotals,
+        peakDayAndCategory = peakDayAndCategory,
+        narrative = narrative,
+        currentBalance = currentBalance,
+        forecastEndBalance = forecastEndBalance
+    )
+}
+
 data class CategoryShare(val categoryId: Long, val name: String, val amount: Double, val color: Color)
 data class Achievement(val title: String, val description: String, val unlocked: Boolean)
 
@@ -1056,9 +1317,6 @@ private fun buildDayBuckets(
         return cal.timeInMillis
     }
 
-    val dayFmtShort = SimpleDateFormat("d MMM", Locale.getDefault())
-    val dayFmtFull = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
-    val dayNumFmt = SimpleDateFormat("d", Locale.getDefault())
 
     val dayAmountMap = mutableMapOf<Long, Double>()
     expenses.forEach { tx ->
@@ -1073,8 +1331,8 @@ private fun buildDayBuckets(
 
     while (current <= end) {
         val amt = dayAmountMap[current] ?: 0.0
-        val label = if (totalDays <= 14) dayFmtShort.format(Date(current)) else dayNumFmt.format(Date(current))
-        buckets.add(DayBucket(current, label, dayFmtFull.format(Date(current)), amt))
+        val label = formatDate(current, if (totalDays <= 14) "d MMM" else "d")
+        buckets.add(DayBucket(current, label, formatDate(current, "MMM d, yyyy"), amt))
 
         cal.timeInMillis = current
         cal.add(Calendar.DAY_OF_YEAR, 1)

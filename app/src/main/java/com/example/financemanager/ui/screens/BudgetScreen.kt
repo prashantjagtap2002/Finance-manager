@@ -20,6 +20,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
@@ -33,7 +34,10 @@ import com.example.financemanager.ui.components.IosButton
 import com.example.financemanager.ui.components.IosButtonVariant
 import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.IosCardStyle
+import com.example.financemanager.ui.components.IosTopAppBar
 import com.example.financemanager.ui.components.moneyString
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
+import com.example.financemanager.ui.components.tabBarAwareInsets
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import kotlinx.coroutines.launch
 import sh.calvin.reorderable.ReorderableItem
@@ -53,15 +57,14 @@ fun BudgetScreen(
     showBackButton: Boolean = true
 ) {
     val categories by viewModel.categories.collectAsStateWithLifecycle()
-    val transactions by viewModel.transactions.collectAsStateWithLifecycle()
     val monthlyCategorySpend by viewModel.monthlyCategorySpend.collectAsStateWithLifecycle(initialValue = emptyMap())
     val isPrivacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
 
-    // Zero-Based Budget Math
-    val totalIncome = transactions
-        .filter { it.type == TransactionType.INCOME }
-        .sumOf { it.amount }
-        
+    // Zero-Based Budget Math. Income is this pay cycle's, in the home currency — the same window
+    // the envelopes' spending is measured over. It used to add up every income row ever logged,
+    // so "Monthly Income" grew forever and "left to assign" was out by every past month's pay.
+    val totalIncome by viewModel.monthlyIncomeTotal.collectAsStateWithLifecycle()
+
     val totalAllocated = categories.sumOf { it.budgetLimit }
     val leftToAssign = totalIncome - totalAllocated
 
@@ -79,11 +82,16 @@ fun BudgetScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
+        // The tab bar floats over this screen; snackbars sit above it.
+        contentWindowInsets = tabBarAwareInsets(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = { Text("Budget Envelopes", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = "Budget Envelopes",
+                scrollBehavior = titleBehavior,
                 navigationIcon = {
                     if (showBackButton) {
                         IconButton(onClick = onNavigateBack) {
@@ -95,8 +103,7 @@ fun BudgetScreen(
                     IconButton(onClick = { showAddCategoryDialog = true }) {
                         Icon(Icons.Default.Add, contentDescription = "Add Envelope", tint = SecondaryTeal)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                }
             )
         },
         containerColor = DeepBackground
@@ -123,8 +130,11 @@ fun BudgetScreen(
             state = lazyListState,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
+                // Only the top inset is a hard edge; the bottom one goes into contentPadding so the
+                // list runs on beneath the translucent tab bar while its last row still scrolls clear.
+                .padding(top = paddingValues.calculateTopPadding())
                 .padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // 1. Zero-Based Budget Assistant Card
@@ -282,25 +292,48 @@ fun BudgetScreen(
                                 modifier = Modifier
                                     .size(40.dp)
                                     .clip(CircleShape)
-                                    .background(Color(android.graphics.Color.parseColor(category.colorHex)).copy(alpha = 0.15f)),
+                                    .background(paletteWash(category.colorHex)),
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
                                     imageVector = getCategoryIcon(category.iconName),
                                     contentDescription = category.name,
-                                    tint = Color(android.graphics.Color.parseColor(category.colorHex)),
+                                    tint = paletteTone(category.colorHex),
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
+                            // The name used to share its line with the "left" figure, so any
+                            // name longer than a word was cut off. It now gets the full width,
+                            // and the amounts sit on their own line underneath.
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
                                     category.name,
                                     style = Typography.titleMedium.copy(color = TextPrimary),
-                                    maxLines = 1,
+                                    maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Row(verticalAlignment = Alignment.Bottom) {
+                                    Text(
+                                        if (envelopeRemaining < 0) "${moneyString(-envelopeRemaining, isPrivacy)} over"
+                                        else "${moneyString(envelopeRemaining, isPrivacy)} left",
+                                        style = Typography.titleSmall.copy(
+                                            color = if (envelopeRemaining >= 0) TextPrimary else AlertRed,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        maxLines = 1
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        "of ${moneyString(category.budgetLimit, isPrivacy)}",
+                                        style = Typography.labelMedium.copy(color = TextSecondary),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                }
                                 Text(
-                                    "of ${moneyString(category.budgetLimit, isPrivacy)}",
+                                    "Spent ${moneyString(envelopeSpent, isPrivacy)}",
                                     style = Typography.labelMedium.copy(color = TextSecondary)
                                 )
                                 if (category.rolloverAmount > 0.0) {
@@ -308,64 +341,41 @@ fun BudgetScreen(
                                 }
                             }
                         }
-                        
-                        Spacer(modifier = Modifier.width(12.dp))
 
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            // This screen used to show only the limit, so the envelope list you
-                            // open to think about budgets told you less than the home summary did.
-                            Column(horizontalAlignment = Alignment.End) {
-                                Text(
-                                    "${moneyString(envelopeRemaining, isPrivacy)} left",
-                                    style = Typography.titleMedium.copy(
-                                        color = if (envelopeRemaining >= 0) TextPrimary else AlertRed,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                )
-                                Text(
-                                    "Spent: ${moneyString(envelopeSpent, isPrivacy)}",
-                                    style = Typography.labelMedium.copy(color = TextSecondary)
-                                )
+                        Box {
+                            IconButton(onClick = { menuExpanded = true }) {
+                                Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = TextSecondary)
                             }
-                            
-                            Box {
-                                IconButton(onClick = { menuExpanded = true }) {
-                                    Icon(Icons.Default.MoreVert, contentDescription = "Options", tint = TextSecondary)
-                                }
-                                DropdownMenu(
-                                    expanded = menuExpanded,
-                                    onDismissRequest = { menuExpanded = false },
-                                    modifier = Modifier.background(DarkSurface)
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("Edit Envelope", color = SecondaryTeal) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            categoryToEditLimit = category
-                                            editLimitInput = category.budgetLimit.toInt().toString()
-                                        },
-                                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = SecondaryTeal) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Update Rollover", color = AccentGreen) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            categoryToUpdateRollover = category
-                                        },
-                                        leadingIcon = { Icon(Icons.Default.Autorenew, contentDescription = null, tint = AccentGreen) }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Delete Envelope", color = AlertRed) },
-                                        onClick = {
-                                            menuExpanded = false
-                                            categoryToDelete = category
-                                        },
-                                        leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = AlertRed) }
-                                    )
-                                }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false },
+                                modifier = Modifier.background(DarkSurface)
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Edit Envelope", color = SecondaryTeal) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        categoryToEditLimit = category
+                                        editLimitInput = category.budgetLimit.toInt().toString()
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = SecondaryTeal) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Update Rollover", color = AccentGreen) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        categoryToUpdateRollover = category
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Autorenew, contentDescription = null, tint = AccentGreen) }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Delete Envelope", color = AlertRed) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        categoryToDelete = category
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.Delete, contentDescription = null, tint = AlertRed) }
+                                )
                             }
                         }
                     }
@@ -529,11 +539,11 @@ fun BudgetScreen(
                                 modifier = Modifier
                                     .size(32.dp)
                                     .clip(CircleShape)
-                                    .background(Color(android.graphics.Color.parseColor(hex)))
+                                    .background(paletteTone(hex))
                                     .clickable { selectedColor = hex }
                                     .border(
                                         width = if (isSelected) 3.dp else 0.dp,
-                                        color = if (isSelected) Color.White else Color.Transparent,
+                                        color = if (isSelected) TextPrimary else Color.Transparent,
                                         shape = CircleShape
                                     )
                             )
@@ -722,10 +732,10 @@ fun BudgetScreen(
                                 modifier = Modifier
                                     .size(32.dp)
                                     .clip(CircleShape)
-                                    .background(Color(android.graphics.Color.parseColor(colorHex)))
+                                    .background(paletteTone(colorHex))
                                     .border(
                                         width = if (isSelected) 3.dp else 0.dp,
-                                        color = if (isSelected) Color.White else Color.Transparent,
+                                        color = if (isSelected) TextPrimary else Color.Transparent,
                                         shape = CircleShape
                                     )
                                     .clickable { selectedColor = colorHex }

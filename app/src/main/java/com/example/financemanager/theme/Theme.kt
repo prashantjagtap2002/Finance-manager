@@ -9,6 +9,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.LocalIndication
+import com.example.financemanager.ui.components.IosHighlightIndication
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
@@ -20,12 +23,12 @@ val LocalThemeIsDark = compositionLocalOf { true }
 
 private val LightColorScheme = lightColorScheme(
     primary = AppPrimary, onPrimary = Color.White,
-    primaryContainer = AppPrimarySoftLight, onPrimaryContainer = Color(0xFF312C8C),
+    primaryContainer = AppPrimarySoftLight, onPrimaryContainer = Color(0xFF4A3410),
     inversePrimary = AppPrimaryDark,
     secondary = AppTeal, onSecondary = Color.White,
     secondaryContainer = AppSurfaceVariantLight, onSecondaryContainer = AppTextPrimaryLight,
     tertiary = AppSuccess, onTertiary = Color.White,
-    tertiaryContainer = Color(0xFFDCFCE7), onTertiaryContainer = Color(0xFF064E3B),
+    tertiaryContainer = Color(0xFFD9EEDF), onTertiaryContainer = Color(0xFF123D25),
     background = AppBackgroundLight, onBackground = AppTextPrimaryLight,
     surface = AppSurfaceLight, onSurface = AppTextPrimaryLight,
     surfaceVariant = AppSurfaceVariantLight, onSurfaceVariant = AppTextSecondaryLight,
@@ -38,17 +41,17 @@ private val LightColorScheme = lightColorScheme(
     scrim = Color(0x66000000),
     inverseSurface = AppTextPrimaryLight, inverseOnSurface = AppBackgroundLight,
     error = AppError, onError = Color.White,
-    errorContainer = Color(0xFFFFE4E9), onErrorContainer = Color(0xFF881337)
+    errorContainer = Color(0xFFF9DCD7), onErrorContainer = Color(0xFF5E1F17)
 )
 
 private val DarkColorScheme = darkColorScheme(
-    primary = AppPrimaryDark, onPrimary = Color(0xFF13122B),
+    primary = AppPrimaryDark, onPrimary = AppOnAccentDark,
     primaryContainer = AppPrimarySoftDark, onPrimaryContainer = AppPrimaryDark,
     inversePrimary = AppPrimary,
-    secondary = AppTealDark, onSecondary = Color(0xFF04211E),
+    secondary = AppTealDark, onSecondary = Color(0xFF0E1720),
     secondaryContainer = AppSurfaceVariantDark, onSecondaryContainer = AppTextPrimaryDark,
-    tertiary = AppSuccessDark, onTertiary = Color(0xFF04231A),
-    tertiaryContainer = Color(0xFF10281F), onTertiaryContainer = AppSuccessDark,
+    tertiary = AppSuccessDark, onTertiary = Color(0xFF0B2216),
+    tertiaryContainer = Color(0xFF15291D), onTertiaryContainer = AppSuccessDark,
     background = AppBackgroundDark, onBackground = AppTextPrimaryDark,
     surface = AppSurfaceDark, onSurface = AppTextPrimaryDark,
     surfaceVariant = AppSurfaceVariantDark, onSurfaceVariant = AppTextSecondaryDark,
@@ -60,8 +63,8 @@ private val DarkColorScheme = darkColorScheme(
     outline = AppOutlineDark, outlineVariant = AppOutlineDark,
     scrim = Color(0xAA000000),
     inverseSurface = AppTextPrimaryDark, inverseOnSurface = AppBackgroundDark,
-    error = AppErrorDark, onError = Color(0xFF2B0710),
-    errorContainer = Color(0xFF2E1219), onErrorContainer = AppErrorDark
+    error = AppErrorDark, onError = Color(0xFF2A0D09),
+    errorContainer = Color(0xFF3A1C17), onErrorContainer = AppErrorDark
 )
 
 // One radius family, generously rounded. Minimal UIs get their calm from
@@ -96,6 +99,15 @@ fun FinanceManagerTheme(themeMode: ThemePreference = ThemePreference.SYSTEM, con
     }
 
     CompositionLocalProvider(LocalThemeIsDark provides darkTheme) {
-        MaterialTheme(colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme, typography = Typography, shapes = AppShapes, content = content)
+        MaterialTheme(colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme, typography = Typography, shapes = AppShapes) {
+            // Every Modifier.clickable gets the iOS press highlight instead of Material's ripple.
+            // A white wash is what reads on charcoal; on a light canvas it would vanish, so the
+            // light theme darkens instead.
+            val highlight = if (darkTheme) Color.White.copy(alpha = 0.07f) else Color.Black.copy(alpha = 0.06f)
+            CompositionLocalProvider(
+                LocalIndication provides remember(highlight) { IosHighlightIndication(highlight) },
+                content = content
+            )
+        }
     }
 }

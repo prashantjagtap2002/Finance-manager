@@ -1,5 +1,6 @@
 package com.example.financemanager.ui.screens
 
+import com.example.financemanager.ui.components.formatDate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -43,6 +44,7 @@ import com.example.financemanager.theme.TextPrimary
 import com.example.financemanager.theme.TextSecondary
 import com.example.financemanager.theme.Typography
 import com.example.financemanager.theme.WarningAmber
+import com.example.financemanager.theme.paletteTone
 import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
@@ -146,7 +148,7 @@ fun TransactionsByCategoryScreen(
 
     val category = categories.firstOrNull { it.id == categoryId }
     val categoryName = category?.name ?: "Category"
-    val categoryColor = category?.colorHex?.let { Color(android.graphics.Color.parseColor(it)) } ?: Color.Gray
+    val categoryColor = paletteTone(category?.colorHex)
 
     val spentThisPeriod = remember(transactions) {
         transactions.filter { it.type == TransactionType.EXPENSE }.sumOf { it.amount }
@@ -335,10 +337,14 @@ fun TransactionsByCategoryScreen(
                                 }
                             )
                         } else {
+                            // The swipe state outlives recomposition, so read the row through
+                            // rememberUpdatedState: a captured `transaction` would be the copy from
+                            // before any edit, and deleting it would reverse the stale amount.
+                            val currentTransaction by rememberUpdatedState(transaction)
                             val dismissState = rememberSwipeToDismissBoxState(
                                 confirmValueChange = { value ->
                                     if (value == SwipeToDismissBoxValue.EndToStart) {
-                                        transactionToDelete = transaction
+                                        transactionToDelete = currentTransaction
                                     }
                                     false
                                 }
@@ -398,7 +404,8 @@ fun TransactionsByCategoryScreen(
             onSplitClick = {
                 transactionToSplit = transaction
                 editingTransaction = null
-            }
+            },
+            extraContent = { com.example.financemanager.ui.components.ReceiptSection(viewModel, transaction.id) }
         )
     }
 
@@ -441,7 +448,7 @@ fun TransactionsByCategoryScreen(
                                     modifier = Modifier
                                         .size(12.dp)
                                         .clip(CircleShape)
-                                        .background(Color(android.graphics.Color.parseColor(targetCategory.colorHex)))
+                                        .background(paletteTone(targetCategory.colorHex))
                                 )
                                 Text(targetCategory.name, style = Typography.bodyMedium.copy(color = TextPrimary))
                             }
@@ -525,7 +532,6 @@ private fun SelectableTransactionRow(
     selected: Boolean,
     onToggle: () -> Unit
 ) {
-    val dateFormatter = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
 
     IosCard(
         modifier = Modifier
@@ -562,7 +568,7 @@ private fun SelectableTransactionRow(
                         maxLines = 1
                     )
                     Text(
-                        text = dateFormatter.format(Date(transaction.date)),
+                        text = formatDate(transaction.date, "MMM dd, yyyy"),
                         style = Typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                 }
@@ -583,7 +589,6 @@ fun TransactionCategoryItem(
     onDeleteClick: () -> Unit = {},
     onRecategorizeClick: () -> Unit = {}
 ) {
-    val dateFormatter = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
 
     IosCard(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -613,7 +618,7 @@ fun TransactionCategoryItem(
                         maxLines = 1
                     )
                     Text(
-                        text = dateFormatter.format(Date(transaction.date)),
+                        text = formatDate(transaction.date, "MMM dd, yyyy"),
                         style = Typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurfaceVariant)
                     )
                 }

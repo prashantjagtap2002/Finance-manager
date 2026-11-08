@@ -62,8 +62,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -75,6 +73,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.example.financemanager.ui.components.IosTopAppBar
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -84,6 +83,8 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.financemanager.data.AccountType
+import com.example.financemanager.data.DebtType
 import com.example.financemanager.data.RecurringInterval
 import com.example.financemanager.data.TransactionType
 import com.example.financemanager.services.OcrAnalyzer
@@ -100,6 +101,8 @@ import com.example.financemanager.theme.TextPrimary
 import com.example.financemanager.theme.TextSecondary
 import com.example.financemanager.theme.Typography
 import com.example.financemanager.theme.WarningAmber
+import com.example.financemanager.theme.paletteTone
+import com.example.financemanager.theme.paletteWash
 
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
@@ -146,6 +149,18 @@ fun QuickEntryScreen(
     var isScanningReceipt by remember { mutableStateOf(false) }
     var receiptResult by remember { mutableStateOf<OcrResult?>(null) }
     var showUpgradePrompt by remember { mutableStateOf(false) }
+    // An expense paid on someone's behalf (or income that was really a loan) becomes an IOU.
+    var isIou by remember { mutableStateOf(false) }
+    var iouPersonName by remember { mutableStateOf("") }
+    var iouDueDateMillis by remember { mutableStateOf<Long?>(null) }
+    val debts by viewModel.debts.collectAsStateWithLifecycle()
+    val knownPeople = remember(debts) {
+        debts.sortedByDescending { it.date }
+            .map { it.personName.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase() }
+            .take(8)
+    }
 
     val snackbarHostState = remember { SnackbarHostState() }
     val snackbarScope = rememberCoroutineScope()
@@ -155,6 +170,93 @@ fun QuickEntryScreen(
         snackbarScope.launch {
             snackbarHostState.showSnackbar(message, withDismissAction = true)
         }
+    }
+
+    // Set when saving would take the paying account below zero; the dialog asks before going on.
+    var pendingOverdraft by remember { mutableStateOf<OverdraftWarning?>(null) }
+
+    fun saveTransaction(overdraftConfirmed: Boolean) {
+        // Money.parseInput, not toDoubleOrNull: that one accepts "NaN" and "Infinity", and a NaN
+        // passes every `<= 0` check and makes the account balance NaN permanently.
+        val amount = com.example.financemanager.domain.Money.parseInput(amountText)
+        val srcAccountId = selectedAccountId
+        if (amount == null) {
+            notify("Enter an amount greater than zero")
+            return
+        }
+        if (srcAccountId == null) {
+            notify("Pick the account this came from")
+            return
+        }
+        if (selectedType == TransactionType.TRANSFER && destinationAccountId == null && noteInput.isBlank()) {
+            notify("Pick a destination account, or add a note for the transfer")
+            return
+        }
+        if (isIou && iouPersonName.isBlank()) {
+            notify("Enter who this IOU is with")
+            return
+        }
+        val parsedSplits = splitItems.mapNotNull { item ->
+            val itemAmount = com.example.financemanager.domain.Money.parseInput(item.amount) ?: 0.0
+            if (item.categoryId != null && itemAmount > 0) item.categoryId to itemAmount else null
+        }
+        if (!isIou && isSplitTransaction && kotlin.math.abs(parsedSplits.sumOf { it.second } - amount) > 0.01) {
+            notify("The split amounts have to add up to the total")
+            return
+        }
+
+        // Only money leaving the account can overdraw it, and a credit card runs negative by design.
+        val sourceAccount = accounts.firstOrNull { it.id == srcAccountId }
+        val leavesAccount = selectedType == TransactionType.EXPENSE || (!isIou && selectedType == TransactionType.TRANSFER)
+        if (!overdraftConfirmed && leavesAccount && sourceAccount != null &&
+            sourceAccount.type != AccountType.CREDIT_CARD && sourceAccount.balance - amount < 0
+        ) {
+            pendingOverdraft = OverdraftWarning(sourceAccount.name, sourceAccount.balance, sourceAccount.balance - amount)
+            return
+        }
+
+        if (isIou) {
+            val lending = selectedType == TransactionType.EXPENSE
+            viewModel.addIouTransaction(
+                amount = amount,
+                type = if (lending) DebtType.LENT else DebtType.BORROWED,
+                accountId = srcAccountId,
+                personName = iouPersonName,
+                note = listOf(noteInput.trim(), hashtagInput.trim()).filter { it.isNotBlank() }.joinToString(" "),
+                date = selectedDateMillis,
+                dueDate = iouDueDateMillis
+            )
+        } else if (isSplitTransaction) {
+            val taggedNote = listOf(noteInput.ifBlank { nlpTextInput.ifBlank { "Split transaction" } }, hashtagInput.trim()).filter { it.isNotBlank() }.joinToString(" ")
+            viewModel.addSplitTransaction(
+                totalAmount = amount,
+                splits = parsedSplits,
+                accountId = srcAccountId,
+                note = taggedNote,
+                date = selectedDateMillis
+            )
+        } else {
+            val taggedNote = listOf(noteInput.ifBlank {
+                if (selectedType == TransactionType.TRANSFER) {
+                    val destinationName = accounts.firstOrNull { it.id == destinationAccountId }?.name ?: "External transfer"
+                    "Transfer to $destinationName"
+                } else nlpTextInput.ifBlank { "Quick transaction" }
+            }, hashtagInput.trim()).filter { it.isNotBlank() }.joinToString(" ")
+            viewModel.addManualTransaction(
+                amount = amount,
+                type = selectedType,
+                categoryId = if (selectedType == TransactionType.TRANSFER) 0L else (selectedCategoryId ?: 0L),
+                accountId = srcAccountId,
+                note = taggedNote,
+                date = selectedDateMillis,
+                isRecurring = isRecurring,
+                recurringInterval = if (isRecurring) recurringInterval else null,
+                destinationAccountId = if (selectedType == TransactionType.TRANSFER) destinationAccountId else null,
+                isAutoLog = isAutoLog,
+                subscriptionDate = if (isRecurring) subscriptionDateMillis else null
+            )
+        }
+        onNavigateBack()
     }
 
 
@@ -233,14 +335,14 @@ fun QuickEntryScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = { Text("Quick Transaction", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = "Quick Transaction",
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                isLargeTitle = false
             )
         },
         containerColor = DeepBackground
@@ -270,7 +372,7 @@ fun QuickEntryScreen(
                     value = amountText,
                     onValueChange = {
                         amountText = it
-                        viewModel.setAmount(it.toDoubleOrNull() ?: 0.0)
+                        viewModel.setAmount(com.example.financemanager.domain.Money.parseInput(it) ?: 0.0)
                     },
                     label = { Text("Amount", color = TextSecondary) },
                     textStyle = Typography.headlineMedium.copy(
@@ -318,7 +420,11 @@ fun QuickEntryScreen(
                                 .clip(RoundedCornerShape(12.dp))
                                 .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
                                 .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(12.dp))
-                                .clickable { selectedType = type }
+                                .clickable {
+                                    selectedType = type
+                                    // A move between your own accounts can't be a loan to someone.
+                                    if (type == TransactionType.TRANSFER) isIou = false
+                                }
                                 .padding(vertical = 10.dp),
                             contentAlignment = Alignment.Center
                         ) {
@@ -333,7 +439,29 @@ fun QuickEntryScreen(
                 }
             }
 
-            if (selectedType == TransactionType.EXPENSE) {
+            if (selectedType != TransactionType.TRANSFER) {
+                item {
+                    IouCard(
+                        enabled = isIou,
+                        lending = selectedType == TransactionType.EXPENSE,
+                        personName = iouPersonName,
+                        knownPeople = knownPeople,
+                        dueDateMillis = iouDueDateMillis,
+                        onToggle = {
+                            isIou = it
+                            // Money lent isn't split across envelopes, and a loan isn't a bill.
+                            if (it) {
+                                isSplitTransaction = false
+                                isRecurring = false
+                            }
+                        },
+                        onPersonNameChange = { iouPersonName = it },
+                        onDueDateChange = { iouDueDateMillis = it }
+                    )
+                }
+            }
+
+            if (selectedType == TransactionType.EXPENSE && !isIou) {
                 item {
                     Column {
                         Row(
@@ -358,8 +486,8 @@ fun QuickEntryScreen(
                                     Box(
                                         modifier = Modifier
                                             .clip(RoundedCornerShape(16.dp))
-                                            .background(if (selected) Color(android.graphics.Color.parseColor(category.colorHex)) else DarkSurface)
-                                            .border(1.dp, BorderColor, RoundedCornerShape(16.dp))
+                                            .background(if (selected) paletteWash(category.colorHex) else DarkSurface)
+                                            .border(1.dp, if (selected) paletteTone(category.colorHex) else BorderColor, RoundedCornerShape(16.dp))
                                             .clickable { selectedCategoryId = if (selected) null else category.id }
                                             .padding(horizontal = 14.dp, vertical = 8.dp)
                                     ) {
@@ -367,7 +495,7 @@ fun QuickEntryScreen(
                                             Icon(
                                                 imageVector = getCategoryIcon(category.iconName),
                                                 contentDescription = category.name,
-                                                tint = if (selected) TextPrimary else Color(android.graphics.Color.parseColor(category.colorHex)),
+                                                tint = paletteTone(category.colorHex),
                                                 modifier = Modifier.size(16.dp)
                                             )
                                             Text(category.name, style = Typography.labelMedium.copy(color = if (selected) TextPrimary else TextPrimary))
@@ -416,7 +544,7 @@ fun QuickEntryScreen(
                 ) {
                     Text("Date", style = Typography.bodyMedium.copy(color = TextSecondary))
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(java.util.Date(selectedDateMillis)), style = Typography.bodyMedium.copy(color = TextPrimary))
+                        Text(com.example.financemanager.ui.components.formatDate(selectedDateMillis, "dd MMM yyyy"), style = Typography.bodyMedium.copy(color = TextPrimary))
                         Icon(Icons.Default.CalendarToday, contentDescription = "Date", tint = SecondaryTeal, modifier = Modifier.size(18.dp))
                     }
                 }
@@ -545,7 +673,7 @@ fun QuickEntryScreen(
                 }
             }
 
-            item {
+            if (!isIou) item {
                 var showSubDatePicker by remember { mutableStateOf(false) }
                 if (showSubDatePicker) {
                     val subDatePickerState = rememberDatePickerState(initialSelectedDateMillis = subscriptionDateMillis)
@@ -623,7 +751,7 @@ fun QuickEntryScreen(
                             ) {
                                 Text("Next Billing Date", style = Typography.bodyMedium.copy(color = TextPrimary))
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(java.util.Date(subscriptionDateMillis)), style = Typography.bodyMedium.copy(color = TextSecondary))
+                                    Text(com.example.financemanager.ui.components.formatDate(subscriptionDateMillis, "dd MMM yyyy"), style = Typography.bodyMedium.copy(color = TextSecondary))
                                     Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
                                 }
                             }
@@ -654,68 +782,12 @@ fun QuickEntryScreen(
 
             item {
                 IosButton(
-                    onClick = {
-                        val amount = amountText.toDoubleOrNull() ?: 0.0
-                        val srcAccountId = selectedAccountId
-                        if (amount <= 0.0) {
-                            notify("Enter an amount greater than zero")
-                            return@IosButton
-                        }
-                        if (srcAccountId == null) {
-                            notify("Pick the account this came from")
-                            return@IosButton
-                        }
-                        if (selectedType == TransactionType.TRANSFER && destinationAccountId == null && noteInput.isBlank()) {
-                            notify("Pick a destination account, or add a note for the transfer")
-                            return@IosButton
-                        }
-
-                        if (isSplitTransaction) {
-                            val parsedSplits = splitItems.mapNotNull { item ->
-                                val itemAmount = item.amount.toDoubleOrNull() ?: 0.0
-                                if (item.categoryId != null && itemAmount > 0) item.categoryId to itemAmount else null
-                            }
-                            val splitTotal = parsedSplits.sumOf { it.second }
-                            if (kotlin.math.abs(splitTotal - amount) > 0.01) {
-                                notify("The split amounts have to add up to the total")
-                                return@IosButton
-                            }
-                            val taggedNote = listOf(noteInput.ifBlank { nlpTextInput.ifBlank { "Split transaction" } }, hashtagInput.trim()).filter { it.isNotBlank() }.joinToString(" ")
-                            viewModel.addSplitTransaction(
-                                totalAmount = amount,
-                                splits = parsedSplits,
-                                accountId = srcAccountId,
-                                note = taggedNote,
-                                date = selectedDateMillis
-                            )
-                        } else {
-                            val taggedNote = listOf(noteInput.ifBlank {
-                                if (selectedType == TransactionType.TRANSFER) {
-                                    val destinationName = accounts.firstOrNull { it.id == destinationAccountId }?.name ?: "External transfer"
-                                    "Transfer to $destinationName"
-                                } else nlpTextInput.ifBlank { "Quick transaction" }
-                            }, hashtagInput.trim()).filter { it.isNotBlank() }.joinToString(" ")
-                            viewModel.addManualTransaction(
-                                amount = amount,
-                                type = selectedType,
-                                categoryId = if (selectedType == TransactionType.TRANSFER) 0L else (selectedCategoryId ?: 0L),
-                                accountId = srcAccountId,
-                                note = taggedNote,
-                                date = selectedDateMillis,
-                                isRecurring = isRecurring,
-                                recurringInterval = if (isRecurring) recurringInterval else null,
-                                destinationAccountId = if (selectedType == TransactionType.TRANSFER) destinationAccountId else null,
-                                isAutoLog = isAutoLog,
-                                subscriptionDate = if (isRecurring) subscriptionDateMillis else null
-                            )
-                        }
-                        onNavigateBack()
-                    },
+                    onClick = { saveTransaction(overdraftConfirmed = false) },
                     modifier = Modifier.fillMaxWidth().height(56.dp),
                     variant = IosButtonVariant.Accent,
                     accentColor = MaterialTheme.colorScheme.primary
                 ) {
-                    Text("Save Transaction", style = Typography.titleMedium.copy(fontWeight = FontWeight.Bold))
+                    Text(if (isIou) "Save & Create IOU" else "Save Transaction", style = Typography.titleMedium.copy(fontWeight = FontWeight.Bold))
                 }
             }
         }
@@ -737,6 +809,169 @@ fun QuickEntryScreen(
             },
             containerColor = DarkSurface
         )
+    }
+
+    pendingOverdraft?.let { warning ->
+        AlertDialog(
+            onDismissRequest = { pendingOverdraft = null },
+            title = { Text("${warning.accountName} will go negative", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            text = {
+                Text(
+                    "This account has ${moneyString(warning.balance)} left. Saving this will take it to ${moneyString(warning.balanceAfter)}. Do you want to proceed?",
+                    style = Typography.bodyMedium.copy(color = TextSecondary)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingOverdraft = null
+                    saveTransaction(overdraftConfirmed = true)
+                }) { Text("Proceed", color = WarningAmber) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingOverdraft = null }) { Text("Cancel", color = TextSecondary) }
+            },
+            containerColor = DarkSurface
+        )
+    }
+}
+
+private data class OverdraftWarning(val accountName: String, val balance: Double, val balanceAfter: Double)
+
+/**
+ * Turns the transaction into an IOU. An expense becomes money lent (they owe you); income becomes
+ * money borrowed (you owe them). Either way the account still moves, but it is not counted as
+ * spending or earning, and the IOU shows up on the Debt screen to be settled later.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun IouCard(
+    enabled: Boolean,
+    lending: Boolean,
+    personName: String,
+    knownPeople: List<String>,
+    dueDateMillis: Long?,
+    onToggle: (Boolean) -> Unit,
+    onPersonNameChange: (String) -> Unit,
+    onDueDateChange: (Long?) -> Unit
+) {
+    var showDuePicker by remember { mutableStateOf(false) }
+    if (showDuePicker) {
+        val dueState = rememberDatePickerState(initialSelectedDateMillis = dueDateMillis ?: System.currentTimeMillis())
+        DatePickerDialog(
+            onDismissRequest = { showDuePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    dueState.selectedDateMillis?.let { onDueDateChange(it) }
+                    showDuePicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    onDueDateChange(null)
+                    showDuePicker = false
+                }) { Text("No due date") }
+            }
+        ) { DatePicker(state = dueState) }
+    }
+
+    IosCard(
+        modifier = Modifier.fillMaxWidth(),
+        style = IosCardStyle.Grouped
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        if (lending) "Track as IOU (they owe me)" else "Track as IOU (I owe them)",
+                        style = Typography.bodyMedium.copy(color = TextPrimary)
+                    )
+                    Text(
+                        if (lending) "Deducts from the account and records who owes it back"
+                        else "Adds to the account and records who you owe",
+                        style = Typography.labelSmall.copy(color = TextSecondary)
+                    )
+                }
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onToggle,
+                    colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AccentGreen)
+                )
+            }
+
+            if (enabled) {
+                HorizontalDivider(color = BorderColor, modifier = Modifier.padding(start = 16.dp))
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    TextField(
+                        value = personName,
+                        onValueChange = onPersonNameChange,
+                        placeholder = {
+                            Text(if (lending) "Who asked for the money?" else "Who lent you the money?", style = TextStyle(color = TextMuted))
+                        },
+                        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
+                        colors = TextFieldDefaults.colors(
+                            focusedContainerColor = DeepBackground,
+                            unfocusedContainerColor = DeepBackground,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary,
+                            focusedIndicatorColor = Color.Transparent,
+                            unfocusedIndicatorColor = Color.Transparent
+                        ),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done)
+                    )
+                    if (knownPeople.isNotEmpty()) {
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(knownPeople, key = { it.lowercase() }) { name ->
+                                val selected = personName.trim().equals(name, ignoreCase = true)
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surface)
+                                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(16.dp))
+                                        .clickable { onPersonNameChange(name) }
+                                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                                ) {
+                                    Text(
+                                        name,
+                                        style = Typography.labelMedium.copy(
+                                            color = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalDivider(color = BorderColor, modifier = Modifier.padding(start = 16.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showDuePicker = true }
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Due Date", style = Typography.bodyMedium.copy(color = TextPrimary))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            dueDateMillis?.let { com.example.financemanager.ui.components.formatDate(it, "dd MMM yyyy") } ?: "None",
+                            style = Typography.bodyMedium.copy(color = TextSecondary)
+                        )
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -797,8 +1032,8 @@ private fun SplitEditor(
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(8.dp))
-                                    .background(if (selected) Color(android.graphics.Color.parseColor(category.colorHex)) else DarkSurface)
-                                    .border(1.dp, BorderColor, RoundedCornerShape(8.dp))
+                                    .background(if (selected) paletteWash(category.colorHex) else DarkSurface)
+                                    .border(1.dp, if (selected) paletteTone(category.colorHex) else BorderColor, RoundedCornerShape(8.dp))
                                     .clickable {
                                         val updated = splitItems.toMutableList()
                                         updated[index] = splitItem.copy(categoryId = if (selected) null else category.id)

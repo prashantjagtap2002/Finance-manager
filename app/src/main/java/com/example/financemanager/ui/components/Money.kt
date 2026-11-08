@@ -19,9 +19,10 @@ fun moneyString(amount: Double, privacy: Boolean = FinancePreferences.privacyMod
     // Locale.US rather than the default: the grouping and decimal marks here are chosen to go
     // with the currency symbol above, and a default-locale format would render the digits
     // themselves in whatever numbering system the device is set to.
-    return if (decimals <= 0) {
-        "$prefix${String.format(Locale.US, "%,.0f", amount)}"
-    } else {
-        "$prefix${String.format(Locale.US, "%,.${decimals}f", amount)}"
-    }
+    val digits = String.format(Locale.US, "%,.${decimals.coerceAtLeast(0)}f", kotlin.math.abs(amount))
+    // The sign goes before the symbol, as a real minus (U+2212) — "−₹1,200", the way every
+    // hand-built negative in the app is written — not "₹-1,200" from formatting the signed number.
+    // An amount that rounds to zero carries no sign at all.
+    val negative = amount < 0 && digits.any { it in '1'..'9' }
+    return (if (negative) "−" else "") + prefix + digits
 }

@@ -177,7 +177,9 @@ class MigrationTest {
         ).addMigrations(
             FinanceDatabase.MIGRATION_18_19,
             FinanceDatabase.MIGRATION_19_20,
-            FinanceDatabase.MIGRATION_20_21
+            FinanceDatabase.MIGRATION_20_21,
+            FinanceDatabase.MIGRATION_21_22,
+            FinanceDatabase.MIGRATION_22_23
         ).build()
 
         db.openHelper.writableDatabase.query("SELECT name, budgetLimit, updatedAt FROM categories").use { c ->
@@ -211,7 +213,9 @@ class MigrationTest {
             FinanceDatabase.MIGRATION_17_18,
             FinanceDatabase.MIGRATION_18_19,
             FinanceDatabase.MIGRATION_19_20,
-            FinanceDatabase.MIGRATION_20_21
+            FinanceDatabase.MIGRATION_20_21,
+            FinanceDatabase.MIGRATION_21_22,
+            FinanceDatabase.MIGRATION_22_23
         ).build()
 
         db.openHelper.writableDatabase.query("SELECT name, budgetLimit FROM categories").use { c ->
@@ -357,6 +361,60 @@ class MigrationTest {
             assertEquals(1, c.getInt(0))
         }
 
+        db.close()
+    }
+
+    /**
+     * 21 -> 22 links an IOU to the ledger row that moved its money. Every existing debt must come
+     * through at 0: it either moved no money or predates the link, and a non-zero value would let
+     * deleting it revoke a ledger row it never made.
+     */
+    @Test
+    fun migrate21To22_existingDebtsAreUnlinked() {
+        helper.createDatabase(dbName, 21).apply {
+            execSQL(
+                "INSERT INTO debts (id, personName, amount, type, isSettled, date, paidAmount, notes, updatedAt) " +
+                    "VALUES (1, 'Ravi', 500.0, 'LENT', 0, 1757784000000, 0.0, '', 1757784000000)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(dbName, 22, true, FinanceDatabase.MIGRATION_21_22)
+
+        db.query("SELECT personName, amount, ledgerTransactionId FROM debts").use { c ->
+            assertEquals(1, c.count)
+            c.moveToFirst()
+            assertEquals("Ravi", c.getString(0))
+            assertEquals(500.0, c.getDouble(1), 0.001)
+            assertEquals("an existing IOU must read as unlinked", 0L, c.getLong(2))
+        }
+        db.close()
+    }
+
+    /** 22 -> 23 adds the local receipts table and touches nothing that already exists. */
+    @Test
+    fun migrate22To23_addsReceiptsTable() {
+        helper.createDatabase(dbName, 22).apply {
+            execSQL(
+                "INSERT INTO debts (id, personName, amount, type, isSettled, date, paidAmount, notes, updatedAt, ledgerTransactionId) " +
+                    "VALUES (1, 'Ravi', 500.0, 'LENT', 0, 1757784000000, 0.0, '', 1757784000000, 0)"
+            )
+            close()
+        }
+
+        val db = helper.runMigrationsAndValidate(dbName, 23, true, FinanceDatabase.MIGRATION_22_23)
+
+        db.execSQL("INSERT INTO receipts (transactionId, fileName, createdAt) VALUES (7, 'r.jpg', 1)")
+        db.query("SELECT transactionId, fileName FROM receipts").use { c ->
+            assertEquals(1, c.count)
+            c.moveToFirst()
+            assertEquals(7L, c.getLong(0))
+            assertEquals("r.jpg", c.getString(1))
+        }
+        db.query("SELECT COUNT(*) FROM debts").use { c ->
+            c.moveToFirst()
+            assertEquals(1, c.getInt(0))
+        }
         db.close()
     }
 }

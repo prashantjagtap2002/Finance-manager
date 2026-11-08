@@ -1,5 +1,6 @@
 package com.example.financemanager.ui.screens
 
+import com.example.financemanager.ui.components.formatDate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -31,6 +33,8 @@ import com.example.financemanager.theme.*
 import com.example.financemanager.ui.components.IosButton
 import com.example.financemanager.ui.components.IosButtonVariant
 import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosTopAppBar
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import com.example.financemanager.ui.viewmodel.InvestmentHolding
@@ -66,10 +70,12 @@ fun InvestmentsScreen(
 
     InvestmentErrorSnackbar(viewModel)
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = { Text("Investments", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = "Investments",
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
@@ -87,7 +93,7 @@ fun InvestmentsScreen(
                         Icon(Icons.Default.Add, contentDescription = "Add Investment", tint = SecondaryTeal)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                scrollBehavior = titleBehavior
             )
         },
         containerColor = DeepBackground
@@ -132,7 +138,7 @@ fun InvestmentsScreen(
                                 val glColor = if (totalGainLoss >= 0.0) AccentGreen else AlertRed
                                 val sign = if (totalGainLoss >= 0.0) "+" else ""
                                 Text(
-                                    "$sign${moneyString(totalGainLoss)} ($sign${String.format(Locale.getDefault(), "%.1f", totalGainLossPercent)}%)",
+                                    "$sign${moneyString(totalGainLoss)} ($sign${String.format(Locale.US, "%.1f", totalGainLossPercent)}%)",
                                     style = Typography.titleMedium.copy(color = glColor, fontWeight = FontWeight.Bold)
                                 )
                             }
@@ -227,7 +233,7 @@ private fun HoldingCard(holding: InvestmentHolding, onClick: () -> Unit) {
                 Column(horizontalAlignment = Alignment.End) {
                     Text(moneyString(holding.currentValue), style = Typography.titleMedium.copy(color = TextPrimary, fontWeight = FontWeight.Bold))
                     Text(
-                        "$sign${moneyString(holding.gainLoss)} ($sign${String.format(Locale.getDefault(), "%.1f", holding.gainLossPercent)}%)",
+                        "$sign${moneyString(holding.gainLoss)} ($sign${String.format(Locale.US, "%.1f", holding.gainLossPercent)}%)",
                         style = Typography.labelSmall.copy(color = glColor)
                     )
                 }
@@ -342,10 +348,12 @@ fun InvestmentDetailScreen(
 
     InvestmentErrorSnackbar(viewModel)
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = { Text(holding?.investment?.name ?: "Investment", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = holding?.investment?.name ?: "Investment",
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
@@ -356,7 +364,7 @@ fun InvestmentDetailScreen(
                         Icon(Icons.Default.Delete, contentDescription = "Delete Investment", tint = AlertRed)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                scrollBehavior = titleBehavior
             )
         },
         containerColor = DeepBackground
@@ -396,7 +404,7 @@ fun InvestmentDetailScreen(
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text("Current Value: ${moneyString(holding.currentValue)}", style = Typography.bodyMedium.copy(color = TextPrimary))
                             Text(
-                                "$sign${moneyString(holding.gainLoss)} ($sign${String.format(Locale.getDefault(), "%.1f", holding.gainLossPercent)}%)",
+                                "$sign${moneyString(holding.gainLoss)} ($sign${String.format(Locale.US, "%.1f", holding.gainLossPercent)}%)",
                                 style = Typography.bodyMedium.copy(color = glColor, fontWeight = FontWeight.Bold)
                             )
                         }
@@ -579,7 +587,6 @@ private fun InvestmentTxnItem(
     onEditClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
-    val dateFormatter = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
     val (label, color) = when (txn.type) {
         InvestmentTxnType.BUY -> "Buy" to AccentGreen
         InvestmentTxnType.SIP_INSTALLMENT -> "SIP" to SecondaryTeal
@@ -602,7 +609,7 @@ private fun InvestmentTxnItem(
                             .background(color.copy(alpha = 0.15f))
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     )
-                    Text(dateFormatter.format(Date(txn.date)), style = Typography.labelSmall.copy(color = TextMuted))
+                    Text(formatDate(txn.date, "MMM dd, yyyy"), style = Typography.labelSmall.copy(color = TextMuted))
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text("${qtyString(txn.quantity)} units @ ${moneyString(txn.pricePerUnit)}", style = Typography.bodyMedium.copy(color = TextPrimary))
@@ -642,7 +649,6 @@ private fun LogInvestmentTxnDialog(
     val selectedDate = remember { java.util.Calendar.getInstance().apply { timeInMillis = initialDate ?: System.currentTimeMillis() } }
     var showDatePicker by remember { mutableStateOf(false) }
     val datePickerState = rememberDatePickerState(initialSelectedDateMillis = selectedDate.timeInMillis)
-    val dateFormatter = SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 
     val title = when (txnType) {
         InvestmentTxnType.BUY -> "Log Buy"
@@ -683,7 +689,7 @@ private fun LogInvestmentTxnDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Date", style = Typography.bodyMedium.copy(color = TextSecondary))
-                    Text(dateFormatter.format(selectedDate.time), style = Typography.bodyMedium.copy(color = TextPrimary))
+                    Text(com.example.financemanager.ui.components.formatDate(selectedDate.timeInMillis, "dd MMM yyyy"), style = Typography.bodyMedium.copy(color = TextPrimary))
                 }
 
                 Box(modifier = Modifier.fillMaxWidth()) {

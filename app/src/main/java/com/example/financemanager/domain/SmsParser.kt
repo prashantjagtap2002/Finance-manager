@@ -14,6 +14,14 @@ data class ParsedSms(
 object SmsParser {
 
     /**
+     * The user's own rules and which built-in parsers are switched off, from Settings → SMS Rules.
+     * Set by `core.SmsRuleStore`; kept here rather than passed in so the receiver, the imports and
+     * the tests all go through the same [parse] without each having to fetch it.
+     */
+    @Volatile
+    var config: SmsParserConfig = SmsParserConfig()
+
+    /**
      * Returns true only for messages that contain strong marketing signals without the
      * identity of a completed banking transaction. Words such as "win" and "free" are
      * deliberately matched as whole words: they occur in perfectly valid alerts such as
@@ -39,8 +47,38 @@ object SmsParser {
         return !completedTransaction
     }
 
-    fun parse(sender: String, message: String): ParsedSms? {
-        if (isPromotionalMessage(message)) return null
+    /**
+     * India's DLT scheme makes every commercial sender ID carry its category as a suffix:
+     * `-S` service, `-T` transactional, `-G` government, `-P` promotional. A promotional header
+     * is not allowed to carry a transaction alert, so anything sent under one is marketing.
+     */
+    fun isPromotionalSender(sender: String): Boolean = promotionalSenderRegex.matches(sender.trim())
+
+    private val promotionalSenderRegex = Regex("^[A-Z]{2}-[A-Z0-9]{3,9}-P$", RegexOption.IGNORE_CASE)
+
+    fun parse(sender: String, message: String): ParsedSms? = parseDetailed(sender, message).parsed
+
+    /**
+     * [parse], plus what handled the message. Custom rules go first so they can override anything
+     * built in, then the promotional filter, the bank-specific parsers and the generic fallback —
+     * each of which can be switched off.
+     */
+    fun parseDetailed(
+        sender: String,
+        message: String,
+        config: SmsParserConfig = this.config
+    ): SmsParseResult {
+        SmsRuleEngine.apply(config.customRules, sender, message)?.let { return it }
+        if (config.isEnabled(BuiltInSmsParser.PROMO_FILTER) &&
+            (isPromotionalSender(sender) || isPromotionalMessage(message))
+        ) {
+            return SmsParseResult(null, SmsParseSource.PromoFiltered)
+        }
+        return parseBuiltIn(sender, message, config)
+    }
+
+    private fun parseBuiltIn(sender: String, message: String, config: SmsParserConfig): SmsParseResult {
+        var builtIn = BuiltInSmsParser.GENERIC
 
         var accountName = ""
         var type = ""
@@ -51,12 +89,20 @@ object SmsParser {
 
         val senderUpper = sender.uppercase()
         val msgTrimmed = message.trim()
+        // The bank parsers below also recognise a bank from the message text alone ("Kotak Bank",
+        // "-SBI"), which is what lets a phone number pass itself off as one. Only a real sender
+        // header may be trusted on content; a phone number has to name the bank in its sender,
+        // which it never can. Same rule as [isFromFinancialInstitution] applies to the fallback.
+        val trustContent = !phoneNumberSenderRegex.matches(sender.trim())
 
         // ============================================================
         // 1. TJSB BANK
         // ============================================================
-        if (senderUpper.contains("TJSB") || Regex("TJSB Bank[.]?\$").containsMatchIn(msgTrimmed)) {
+        if (config.isEnabled(BuiltInSmsParser.TJSB) &&
+            (senderUpper.contains("TJSB") || (trustContent && Regex("TJSB Bank[.]?\$").containsMatchIn(msgTrimmed)))
+        ) {
             accountName = "TJSB"
+            builtIn = BuiltInSmsParser.TJSB
 
             // --- UPI CREDIT ---
             if (message.contains("CREDITED") && message.contains(Regex("Rs\\.\\d"))) {
@@ -120,8 +166,11 @@ object SmsParser {
         // ============================================================
         // 2. SBI
         // ============================================================
-        else if (message.endsWith("-SBI") || message.contains(".-SBI") || senderUpper.contains("SBI")) {
+        else if (config.isEnabled(BuiltInSmsParser.SBI) &&
+            ((trustContent && (message.endsWith("-SBI") || message.contains(".-SBI"))) || senderUpper.contains("SBI"))
+        ) {
             accountName = "SBI"
+            builtIn = BuiltInSmsParser.SBI
 
             // --- CREDIT (CDM/Transfer) ---
             if (Regex("Credited INR", RegexOption.IGNORE_CASE).containsMatchIn(message)) {
@@ -216,16 +265,18 @@ object SmsParser {
         // ============================================================
         // 3. KOTAK BANK
         // ============================================================
-        else if (message.contains("Kotak Bank", ignoreCase = true) || senderUpper.contains("KOTAK")) {
+        else if (config.isEnabled(BuiltInSmsParser.KOTAK) &&
+            ((trustContent && message.contains("Kotak Bank", ignoreCase = true)) || senderUpper.contains("KOTAK"))
+        ) {
             accountName = "Kotak"
+            builtIn = BuiltInSmsParser.KOTAK
 
             // --- UPI CREDIT ---
             if (Regex("^Received Rs\\.", RegexOption.MULTILINE).containsMatchIn(message)) {
                 type = "credit"
                 amount = "Rs." + (Regex("Received Rs\\.([\\d,]+\\.?\\d*)").find(message)?.groupValues?.getOrNull(1)?.replace(",", "") ?: "")
                 balance = "Rs." + (Regex("Bal:([\\d,]+\\.?\\d*)").find(message)?.groupValues?.getOrNull(1)?.replace(",", "") ?: "")
-                val cpM = Regex("from ([^\\s]+) on").find(message)
-                counterparty = cpM?.groupValues?.getOrNull(1) ?: ""
+                counterparty = kotakParty("from", message)
                 val refM = Regex("UPI Ref[:\\s]?(\\d+)").find(message)
                 reference = refM?.groupValues?.getOrNull(1) ?: ""
             }
@@ -250,8 +301,7 @@ object SmsParser {
                 type = "debit"
                 amount = "Rs." + (Regex("Sent Rs\\.([\\d,]+\\.?\\d*)").find(message)?.groupValues?.getOrNull(1)?.replace(",", "") ?: "")
                 balance = "Rs." + (Regex("Bal:([\\d,]+\\.?\\d*)").find(message)?.groupValues?.getOrNull(1)?.replace(",", "") ?: "")
-                val cpM = Regex("to ([^\\s]+) on").find(message)
-                counterparty = cpM?.groupValues?.getOrNull(1) ?: ""
+                counterparty = kotakParty("to", message)
                 val refM = Regex("UPI Ref (\\d+)").find(message)
                 reference = refM?.groupValues?.getOrNull(1) ?: ""
             }
@@ -274,12 +324,13 @@ object SmsParser {
         // ============================================================
         // 4. AMAZON PAY / JUSPAY
         // ============================================================
-        else if (
+        else if (config.isEnabled(BuiltInSmsParser.AMAZON_PAY) && (
             sender.contains("57575") ||
             sender == "575754" ||
             senderUpper.contains("JUSPAY") ||
-            message.lowercase().contains("apay wallet")
-        ) {
+            (trustContent && message.lowercase().contains("apay wallet"))
+        )) {
+            builtIn = BuiltInSmsParser.AMAZON_PAY
             accountName = "Amazon Pay"
 
             // --- CREDIT (Add Money) ---
@@ -317,19 +368,45 @@ object SmsParser {
         // Nothing bank-specific matched. Fall back to the shape almost every Indian bank and
         // wallet alert shares, so HDFC/ICICI/Axis/BoB/PNB/Paytm/PhonePe/GPay users get something
         // instead of nothing.
-        if (type.isEmpty()) return parseGeneric(sender, message, accountName)
+        if (type.isEmpty()) {
+            if (!config.isEnabled(BuiltInSmsParser.GENERIC)) {
+                return SmsParseResult(null, SmsParseSource.NotRecognised)
+            }
+            if (!isFromFinancialInstitution(sender, message, accountName)) {
+                return SmsParseResult(null, SmsParseSource.NotFromBank)
+            }
+            val generic = parseGeneric(sender, message, accountName)
+            return SmsParseResult(
+                generic,
+                if (generic != null) SmsParseSource.BuiltIn(BuiltInSmsParser.GENERIC) else SmsParseSource.NotRecognised
+            )
+        }
 
-        return ParsedSms(
-            accountName = accountName,
-            type = type,
-            amount = amount,
-            balance = balance,
-            counterparty = counterparty,
-            reference = reference,
-            rawSender = sender,
-            rawMessage = message
+        return SmsParseResult(
+            ParsedSms(
+                accountName = accountName,
+                type = type,
+                amount = amount,
+                balance = balance,
+                counterparty = counterparty,
+                reference = reference,
+                rawSender = sender,
+                rawMessage = message
+            ),
+            SmsParseSource.BuiltIn(builtIn)
         )
     }
+
+    /**
+     * The payee or payer in Kotak's UPI alerts: "… to SHRI SAI VENUE PARKI on 07-11-26", "… from
+     * abc@okaxis on 05-11-26". The name runs up to " on <date>". This used to take one
+     * whitespace-free token, which only fits a UPI id — any name with a space failed to match, and
+     * the alert was filed under its sender header instead of who was paid.
+     */
+    private fun kotakParty(preposition: String, message: String): String =
+        Regex("\\b$preposition (.+?) on \\d{1,2}[-/]\\d{1,2}[-/]\\d{2,4}").find(message)?.groupValues?.get(1)?.trim()
+            ?: Regex("\\b$preposition (\\S+) on\\b").find(message)?.groupValues?.get(1)
+            ?: ""
 
     // ================================================================
     // GENERIC FALLBACK
@@ -349,6 +426,14 @@ object SmsParser {
         RegexOption.IGNORE_CASE
     )
 
+    private val cardNameRegex = Regex("\\b(?:credit|debit)\\s+card\\b", RegexOption.IGNORE_CASE)
+
+    /** "Thank you for using your … Card", "Card XX1234 has been used for Rs …". */
+    private val cardUsedRegex = Regex(
+        "\\b(?:used|using)\\b[^.]{0,60}\\bcard\\b|\\bcard\\b[^.]{0,60}\\b(?:used|using)\\b",
+        RegexOption.IGNORE_CASE
+    )
+
     /**
      * Phrases that mean "this is not a transaction that happened". Scheduled debits, bill
      * reminders, collect requests and failures all otherwise look exactly like the real thing.
@@ -361,7 +446,9 @@ object SmsParser {
             "failed|declined|unsuccessful|insufficient|could not be processed|" +
             "click here|apply now|pre-approved|pre-qualified|you are eligible|" +
             "welcome bonus|bonus (?:can be|is ready to be) credited|prize pool|" +
-            "brokerage|free cash|gift card|added (?:to|in) your (?:\\w+\\s+){0,3}wallet)\\b",
+            "brokerage|free cash|gift card|added (?:to|in) your (?:\\w+\\s+){0,3}wallet|" +
+            // Store credit, loyalty and coins are never money in a bank account.
+            "store credit|supercash|super ?coins?|loyalty points?|reward points?|referral (?:bonus|reward))\\b",
         RegexOption.IGNORE_CASE
     )
 
@@ -438,8 +525,14 @@ object SmsParser {
         if (notATransactionRegex.containsMatchIn(message)) return null
         if (!bankingContextRegex.containsMatchIn(message)) return null
 
-        val debitMatch = debitRegex.find(message)
-        val creditMatch = creditRegex.find(message)
+        // "Credit card" and "debit card" name the instrument, not the direction: "used your HDFC
+        // Credit Card for Rs 500" is a spend, and reading the first direction word made it income.
+        // The phrases are blanked to spaces rather than removed so match positions still line up
+        // with [message] for the closest-amount pick below. A card that was "used" is a debit.
+        val directionText = cardNameRegex.replace(message) { " ".repeat(it.value.length) }
+        val debitMatch = debitRegex.find(directionText)
+            ?: cardUsedRegex.find(message)?.takeIf { creditRegex.find(directionText) == null }
+        val creditMatch = creditRegex.find(directionText)
         val directionMatch = listOfNotNull(debitMatch, creditMatch).minByOrNull { it.range.first } ?: return null
 
         // Amounts quoted right after a balance/limit word describe the account, not the movement.
@@ -486,13 +579,52 @@ object SmsParser {
         )
     }
 
+    /**
+     * The fallback reads any message shaped like "Rs.X credited to your account", and shops and
+     * apps send exactly that shape about their own store credit ("Rs.300 credited to your
+     * Bewakoof account"). A bank or wallet recognised by its sender ID is trusted; anyone else
+     * has to show what only a real bank alert carries: a masked account or card number.
+     *
+     * A sender that is a plain phone number never counts. Indian banks send alerts only from
+     * registered DLT headers, so "money credited" from a mobile number is the classic scam. A
+     * genuine one-off can still be read with a custom rule, which runs before all of this.
+     */
+    private fun isFromFinancialInstitution(sender: String, message: String, knownAccountName: String): Boolean {
+        if (phoneNumberSenderRegex.matches(sender.trim())) return false
+        if (knownAccountName.isNotEmpty() || bankFromSender(sender).isNotEmpty()) return true
+        return maskedAccountRegex.containsMatchIn(message)
+    }
+
+    private val phoneNumberSenderRegex = Regex("^\\+?[0-9][0-9 -]{6,}$")
+
+    /** `A/c XX1234`, `a/c **1234`, `AC X2769`, `Card no. XXXXXXXX8914`, `A/c X8914-debited`. */
+    private val maskedAccountRegex = Regex(
+        "\\b(?:a/c|acct|account|ac|card)\\b[^0-9\\n]{0,15}[xX*]+\\d{3,6}\\b",
+        RegexOption.IGNORE_CASE
+    )
+
     private fun bankFromSender(sender: String): String {
         val tokens = sender.uppercase().split("-", ".", "_").filter { it.isNotBlank() }
         // Skip the two-letter operator prefix ("VM", "AD", "JD") and any single-letter suffix.
         tokens.filter { it.length > 2 }.forEach { token ->
             knownSenders[token]?.let { return it }
-            knownSenders.entries.firstOrNull { token.contains(it.key) }?.let { return it.value }
+            knownSenders.entries.firstOrNull { (key, _) -> headerStartsWithBank(token, key) }?.let { return it.value }
         }
         return ""
     }
+
+    /**
+     * Whether a header the table doesn't list exactly ("HDFCBN", "SBIBNK") still belongs to [key]'s
+     * bank. This decides trust, so it used to be too loose: a plain substring test let "BOBBLE"
+     * pass as Bank of Baroda and "XYZSBI" as SBI. Now the header has to *start* with the key, and
+     * a three-letter key (BOB, BOI, IOB, PNB, SBI) has to be followed by nothing but a bank-style
+     * suffix, since three letters open plenty of ordinary words.
+     */
+    private fun headerStartsWithBank(token: String, key: String): Boolean {
+        if (!token.startsWith(key)) return false
+        if (key.length >= 4) return true
+        return token.removePrefix(key) in shortKeySuffixes
+    }
+
+    private val shortKeySuffixes = setOf("", "BK", "BNK", "BANK", "SMS", "TXN", "IBK", "INB", "IND", "UPI", "PSG", "ALRT", "ALERT", "CRD", "CARD", "MSG")
 }

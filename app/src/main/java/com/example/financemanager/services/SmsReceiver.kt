@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
+import com.example.financemanager.core.SmsRuleStore
 import com.example.financemanager.data.FinanceDatabase
 import com.example.financemanager.data.SmsTransaction
 import com.example.financemanager.domain.SmsParser
@@ -55,6 +56,9 @@ class SmsReceiver : BroadcastReceiver() {
 
         if (sender.isBlank() || messageBody.isBlank()) return
 
+        // The receiver can start the process on its own, before any activity has loaded the
+        // user's rules from Settings → SMS Rules.
+        SmsRuleStore.ensureLoaded(context)
         val parsed = SmsParser.parse(sender, messageBody) ?: return
 
         val smsHash = generateSmsHash(sender, messageBody, receivedAtMillis)

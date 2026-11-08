@@ -27,8 +27,10 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawBehind
@@ -81,7 +83,10 @@ fun DashboardScreen(
     onNavigateToDebt: () -> Unit = {},
     onNavigateToNetWorth: () -> Unit = {},
     onNavigateToSmsTransactions: () -> Unit = {},
-    onNavigateToCategory: (Long, Int, Int) -> Unit = { _, _, _ -> }
+    onNavigateToCategory: (Long, Int, Int) -> Unit = { _, _, _ -> },
+    onNavigateToSmsReview: () -> Unit = {},
+    onNavigateToDuplicates: () -> Unit = {},
+    onNavigateToCalendar: () -> Unit = {}
 ) {
     val accounts by viewModel.accounts.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
@@ -96,6 +101,10 @@ fun DashboardScreen(
     val isPrivacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
     val badges by viewModel.unlockedBadges.collectAsStateWithLifecycle()
     val aiRecap by viewModel.aiRecapText.collectAsStateWithLifecycle()
+    val forecast by viewModel.forecast.collectAsStateWithLifecycle()
+    val duplicatePairs by viewModel.duplicatePairs.collectAsStateWithLifecycle()
+    val pendingSms by viewModel.pendingSmsTransactions.collectAsStateWithLifecycle()
+    val receiptIds by viewModel.transactionsWithReceipts.collectAsStateWithLifecycle()
     // Read so the pace calculation below re-runs when the user changes their cycle settings.
     val payCycleFrequency by viewModel.payCycleFrequency.collectAsStateWithLifecycle()
     val payCycleAnchorDay by viewModel.payCycleAnchorDay.collectAsStateWithLifecycle()
@@ -166,11 +175,16 @@ fun DashboardScreen(
         }
     }
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
+        // The tab bar floats over this screen; the FAB and snackbars sit above it.
+        contentWindowInsets = tabBarAwareInsets(),
         topBar = {
             val isDark = LocalThemeIsDark.current
             IosTopAppBar(
                 title = "Finance",
+                scrollBehavior = titleBehavior,
                 actions = {
                     IconButton(onClick = onNavigateToSearch) {
                         Icon(Icons.Default.Search, contentDescription = "Search")
@@ -192,16 +206,21 @@ fun DashboardScreen(
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            val isDark = LocalThemeIsDark.current
             FloatingActionButton(
                 onClick = onNavigateToQuickEntry,
-                // The accent runs light on a dark canvas and deep on a light one,
-                // so the glyph has to flip with it to stay legible.
+                // A coloured glow rather than a grey drop shadow: the button is the one gold
+                // object floating over the list.
+                modifier = Modifier.shadow(
+                    elevation = 14.dp,
+                    shape = RoundedCornerShape(20.dp),
+                    ambientColor = PrimaryViolet,
+                    spotColor = PrimaryViolet
+                ),
+                // OnAccent flips with the accent's tone so the glyph stays legible.
                 containerColor = PrimaryViolet,
-                contentColor = if (isDark) Color(0xFF13122B) else Color.White,
+                contentColor = OnAccent,
                 shape = RoundedCornerShape(20.dp),
-                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 0.dp, pressedElevation = 0.dp),
-                modifier = Modifier.padding(bottom = 16.dp)
+                elevation = FloatingActionButtonDefaults.elevation(defaultElevation = 0.dp, pressedElevation = 0.dp)
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Quick Entry", modifier = Modifier.size(28.dp))
             }
@@ -211,12 +230,14 @@ fun DashboardScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues),
+                // Only the top inset is a hard edge. The bottom one goes into contentPadding so the
+                // list runs on beneath the translucent tab bar while its last row still scrolls clear.
+                .padding(top = paddingValues.calculateTopPadding()),
             // The FAB floats over this list, so the scroll range has to end clear of it —
             // otherwise the last rows scroll to rest underneath and their controls can't be
             // reached at all. contentPadding extends the scroll range; a trailing Spacer would
             // only pad the final item.
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 96.dp),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 80.dp + paddingValues.calculateBottomPadding()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             cashflowWarning?.let { warningMsg ->
@@ -234,6 +255,17 @@ fun DashboardScreen(
                             Text(warningMsg, style = iOSCallout)
                         }
                     }
+                }
+            }
+
+            if (pendingSms.isNotEmpty() || duplicatePairs.isNotEmpty()) {
+                item(key = "needs-attention") {
+                    NeedsAttentionCard(
+                        pendingSms = pendingSms.size,
+                        duplicates = duplicatePairs.size,
+                        onReviewSms = onNavigateToSmsReview,
+                        onReviewDuplicates = onNavigateToDuplicates
+                    )
                 }
             }
 
@@ -286,11 +318,9 @@ fun DashboardScreen(
 
             // 1. Hero Card: Displays Current Month Spent & Total Balance (Clickable for Financial Insights & Balances)
             item {
-                IosCard(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showInsightsSheet = true },
-                    style = IosCardStyle.Grouped
+                HeroCard(
+                    modifier = Modifier.fillMaxWidth(),
+                    onClick = { showInsightsSheet = true }
                 ) {
                     // Left-aligned and unpilled: one small label, one large number,
                     // a hairline, then the secondary figure. The number is the
@@ -307,7 +337,7 @@ fun DashboardScreen(
                         ) {
                             Text(
                                 text = "SPENT THIS MONTH",
-                                style = iOSCaption2.copy(color = TextMuted, letterSpacing = 1.sp)
+                                style = iOSCaption2.copy(color = TextSecondary, letterSpacing = 1.sp)
                             )
                             if (streakDays >= 2) {
                                 Row(
@@ -339,7 +369,7 @@ fun DashboardScreen(
                         SpendPaceBar(pace = spendPace, privacy = isPrivacy)
 
                         Spacer(modifier = Modifier.height(18.dp))
-                        HorizontalDivider(color = BorderColor, thickness = 1.dp)
+                        HorizontalDivider(color = Color.White.copy(alpha = 0.10f), thickness = 1.dp)
                         Spacer(modifier = Modifier.height(14.dp))
 
                         Row(
@@ -350,7 +380,7 @@ fun DashboardScreen(
                             Column {
                                 Text(
                                     text = "Total balance",
-                                    style = Typography.labelMedium.copy(color = TextMuted)
+                                    style = Typography.labelMedium.copy(color = TextSecondary)
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
@@ -498,6 +528,13 @@ fun DashboardScreen(
                 }
             }
 
+            // 1.8 Where the balance is heading by the end of the cycle
+            forecast?.let { f ->
+                if ("forecast" in dashboardSections) item(key = "forecast") {
+                    ForecastCard(forecast = f, privacy = isPrivacy, onOpenBudget = onNavigateToBudget)
+                }
+            }
+
             // 2. Upcoming bills strip (only when something is due this week)
             if (upcomingBills.isNotEmpty()) {
                 item {
@@ -570,11 +607,7 @@ fun DashboardScreen(
                             goals.sortedByDescending { if (it.targetAmount > 0) it.savedAmount / it.targetAmount else 0.0 }
                                 .take(3)
                                 .forEach { goal ->
-                                    val color = try {
-                                        Color(android.graphics.Color.parseColor(goal.colorHex))
-                                    } catch (e: Exception) {
-                                        AccentGreen
-                                    }
+                                    val color = paletteTone(goal.colorHex)
                                     val ratio = if (goal.targetAmount > 0) (goal.savedAmount / goal.targetAmount).toFloat() else 0f
                                     val animatedGoalRatio by animateFloatAsState(
                                         targetValue = ratio.coerceIn(0f, 1f),
@@ -663,6 +696,8 @@ fun DashboardScreen(
             // 6. Recent Transactions Section Header
             if ("transactions" in dashboardSections) item {
                 SectionHeader("Recent Transactions") {
+                    SectionAction("Calendar", onNavigateToCalendar)
+                    Spacer(modifier = Modifier.width(4.dp))
                     SectionAction("SMS", onNavigateToSmsTransactions)
                     Spacer(modifier = Modifier.width(4.dp))
                     SectionAction("View all", onNavigateToLogs)
@@ -685,15 +720,20 @@ fun DashboardScreen(
             if ("transactions" in dashboardSections) items(transactions.take(10), key = { "tx-${it.id}" }) { transaction ->
                 val accountName = accountNames[transaction.sourceAccountId]?.name ?: "Account"
                 val categoryName = categoryNames[transaction.categoryId]?.name ?: "Income/Transfer"
-                TransactionItem(
-                    transaction = transaction,
-                    accountName = accountName,
-                    categoryName = categoryName,
-                    privacy = isPrivacy,
+                SwipeActionsBox(
                     onEdit = { editingTransaction = transaction },
                     onDelete = { deleteWithUndo(transaction) },
                     modifier = Modifier.animateItem()
-                )
+                ) {
+                    TransactionItem(
+                        transaction = transaction,
+                        accountName = accountName,
+                        categoryName = categoryName,
+                        privacy = isPrivacy,
+                        onClick = { editingTransaction = transaction },
+                        hasReceipt = transaction.id in receiptIds
+                    )
+                }
             }
 
         }
@@ -707,7 +747,7 @@ fun DashboardScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Choose the sections you want to see.", color = TextSecondary)
-                            listOf("accounts" to "Accounts", "budgets" to "Envelope budgets", "transactions" to "Recent transactions", "intelligence" to "AI recap").forEach { (key, label) ->
+                            listOf("forecast" to "Cycle forecast", "accounts" to "Accounts", "budgets" to "Envelope budgets", "transactions" to "Recent transactions", "intelligence" to "AI recap").forEach { (key, label) ->
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth().clickable {
                             dashboardSections = if (key in dashboardSections) dashboardSections - key else dashboardSections + key
                         }) {
@@ -740,7 +780,8 @@ fun DashboardScreen(
                 )
                 viewModel.updateTransaction(transaction, newTrans)
                 editingTransaction = null
-            }
+            },
+            extraContent = { com.example.financemanager.ui.components.ReceiptSection(viewModel, transaction.id) }
         )
     }
 
@@ -1018,11 +1059,13 @@ fun AccountCard(
     modifier: Modifier = Modifier,
     onClick: () -> Unit = {}
 ) {
-    val accent = when (account.type) {
-        com.example.financemanager.data.AccountType.BANK -> SecondaryTeal
-        com.example.financemanager.data.AccountType.CASH -> AccentGreen
-        com.example.financemanager.data.AccountType.CREDIT_CARD -> AlertRed
-        com.example.financemanager.data.AccountType.WALLET -> WarningAmber
+    // Credit cards used to be red, which made a perfectly healthy card look like a warning.
+    // Red is for money going out, not for an account type.
+    val (accent, icon) = when (account.type) {
+        com.example.financemanager.data.AccountType.BANK -> SecondaryTeal to Icons.Default.AccountBalance
+        com.example.financemanager.data.AccountType.CASH -> AccentGreen to Icons.Default.Payments
+        com.example.financemanager.data.AccountType.CREDIT_CARD -> VioletAccent to Icons.Default.CreditCard
+        com.example.financemanager.data.AccountType.WALLET -> GoldAccent to Icons.Default.AccountBalanceWallet
     }
 
     IosCard(
@@ -1043,14 +1086,17 @@ fun AccountCard(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(accent)
-                    )
+                            .size(26.dp)
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(accent.copy(alpha = 0.16f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(15.dp))
+                    }
                     Text(
                         account.name,
                         style = Typography.labelMedium.copy(color = TextPrimary),
@@ -1148,7 +1194,10 @@ fun EnvelopeProgressItem(
                 ) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            "${moneyString(remaining, privacy)} left",
+                            // Over budget reads as how far over, not "₹0.00 left": the overspend
+                            // is the number the user needs, and remaining is floored at zero.
+                            if (spent > limit) "${moneyString(spent - limit, privacy)} over"
+                            else "${moneyString(remaining, privacy)} left",
                             style = Typography.titleMedium.copy(
                                 color = if (remaining > 0) TextPrimary else AlertRed,
                                 fontWeight = FontWeight.Bold
@@ -1313,8 +1362,8 @@ fun TransactionItem(
     accountName: String,
     categoryName: String,
     privacy: Boolean = FinancePreferences.privacyMode,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
+    onClick: (() -> Unit)? = null,
+    hasReceipt: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     // Expenses are the default case in this list, so they stay neutral — a
@@ -1331,73 +1380,66 @@ fun TransactionItem(
     }
 
     val prefix = when (transaction.type) {
-        TransactionType.EXPENSE -> "-"
+        TransactionType.EXPENSE -> "−"
         TransactionType.INCOME -> "+"
         TransactionType.TRANSFER -> ""
     }
 
-    val dateFormatter = SimpleDateFormat("dd MMM, hh:mm a", Locale.getDefault())
-    val formattedDate = dateFormatter.format(Date(transaction.date))
+    val formattedDate = formatDate(transaction.date, "dd MMM, hh:mm a")
 
+    // Edit and delete live behind a tap and a swipe (see SwipeActionsBox) rather than
+    // as inline buttons, which left the title and account line too little width and
+    // pushed the date onto a second line.
     IosCard(
         modifier = modifier.fillMaxWidth()
     ) {
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(DarkSurface)
+                .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            Box(
+                modifier = Modifier.size(38.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(38.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        val icon = when (transaction.type) {
-                            TransactionType.EXPENSE -> Icons.Outlined.ArrowDownward
-                            TransactionType.INCOME -> Icons.Outlined.ArrowUpward
-                            TransactionType.TRANSFER -> Icons.Outlined.SwapHoriz
-                        }
-                        Icon(icon, contentDescription = transaction.type.name, tint = iconColor, modifier = Modifier.size(22.dp))
-                    }
-                    Column {
-                        Text(
-                            transaction.note.ifEmpty { categoryName },
-                            style = Typography.titleMedium.copy(color = TextPrimary),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            "$accountName • $formattedDate",
-                            style = Typography.labelMedium.copy(color = TextSecondary)
-                        )
-                    }
+                val icon = when (transaction.type) {
+                    TransactionType.EXPENSE -> Icons.Outlined.ArrowDownward
+                    TransactionType.INCOME -> Icons.Outlined.ArrowUpward
+                    TransactionType.TRANSFER -> Icons.Outlined.SwapHoriz
                 }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
+                Icon(icon, contentDescription = transaction.type.name, tint = iconColor, modifier = Modifier.size(22.dp))
+            }
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        transaction.note.ifEmpty { categoryName },
+                        style = Typography.titleMedium.copy(color = TextPrimary),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         "$prefix${moneyString(transaction.amount, privacy)}",
-                        style = Typography.titleMedium.copy(color = amountColor, fontWeight = FontWeight.SemiBold)
+                        style = Typography.titleMedium.copy(color = amountColor, fontWeight = FontWeight.SemiBold),
+                        maxLines = 1
                     )
-                    IconButton(onClick = onEdit, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit", tint = TextMuted, modifier = Modifier.size(16.dp))
+                }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (hasReceipt) {
+                        Icon(Icons.Default.AttachFile, contentDescription = "Has receipt", tint = TextMuted, modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(2.dp))
                     }
-                    IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
-                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = TextMuted, modifier = Modifier.size(16.dp))
-                    }
+                    Text(
+                        "$accountName • $formattedDate",
+                        style = Typography.labelMedium.copy(color = TextSecondary),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }

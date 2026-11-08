@@ -105,7 +105,7 @@ object RecurringScheduler {
         return reminders
     }
 
-    private fun getNextIntervalDate(currentDateMillis: Long, interval: RecurringInterval): Long {
+    fun getNextIntervalDate(currentDateMillis: Long, interval: RecurringInterval): Long {
         val calendar = Calendar.getInstance().apply {
             timeInMillis = currentDateMillis
         }

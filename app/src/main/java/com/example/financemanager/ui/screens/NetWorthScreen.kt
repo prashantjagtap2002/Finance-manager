@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -38,10 +39,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.financemanager.data.AccountType
-import com.example.financemanager.data.DebtType
 import com.example.financemanager.theme.*
 import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.IosCardStyle
+import com.example.financemanager.ui.components.IosTopAppBar
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import kotlin.math.roundToInt
@@ -69,15 +71,11 @@ fun NetWorthScreen(
     var selectedFilter by remember { mutableStateOf(NetWorthPeriodFilter.SIX_MONTHS) }
 
     // Calculate Assets vs Liabilities
-    val assetAccounts = accounts.filter { it.balance >= 0 }
-    val liabilityAccounts = accounts.filter { it.balance < 0 }
-    val totalAssets = assetAccounts.sumOf { it.balance }
-    
-    val totalBorrowedDebts = debts.filter { it.type == DebtType.BORROWED && !it.isSettled }.sumOf { it.amount - it.paidAmount }
-    val totalCreditCardDebt = liabilityAccounts.sumOf { -it.balance }
-    val totalLiabilities = totalBorrowedDebts + totalCreditCardDebt
-
-    val currentNetWorth = totalAssets - totalLiabilities
+    // Money lent on an IOU is an asset: it is owed back, so lending must not read as a loss.
+    val breakdown = remember(accounts, debts) { com.example.financemanager.domain.NetWorth.of(accounts, debts) }
+    val totalAssets = breakdown.assets
+    val totalLiabilities = breakdown.liabilities
+    val currentNetWorth = breakdown.netWorth
 
     // Filter net worth history map based on selected filter
     val filteredHistory = remember(netWorthHistory, selectedFilter) {
@@ -95,17 +93,19 @@ fun NetWorthScreen(
     val percentageDiff = if (previousNetWorth != 0.0) (diff / kotlin.math.abs(previousNetWorth)) * 100 else 0.0
     val isPositive = diff >= 0
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
         containerColor = DeepBackground,
         topBar = {
-            TopAppBar(
-                title = { Text("Net Worth & Wealth", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = "Net Worth & Wealth",
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                scrollBehavior = titleBehavior
             )
         }
     ) { padding ->

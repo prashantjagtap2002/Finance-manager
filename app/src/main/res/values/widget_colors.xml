@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Widget palette: the app's "Titanium & Gold" hero card, in every theme.
+     These used to follow the wallpaper (Material You's system_accent1_*) from Android 12 on, which
+     painted the bars whatever colour the wallpaper happened to be and left the widget looking like
+     a different app. A dark titanium card also stays legible over any wallpaper, light or dark,
+     so there is one palette rather than day/night variants. Values match theme/Color.kt. -->
+<resources>
+    <color name="widget_hero_start">#FF1F2023</color>
+    <color name="widget_hero_end">#FF3A3C41</color>
+    <!-- Gold hairline at 35%, as on the in-app HeroCard. -->
+    <color name="widget_edge">#59E3B566</color>
+    <color name="widget_on_surface">#FFF4F2EE</color>
+    <color name="widget_muted">#FFABA8A1</color>
+    <color name="widget_accent">#FFE3B566</color>
+    <color name="widget_on_accent">#FF1A1305</color>
+    <color name="widget_track">#26FFFFFF</color>
+    <color name="widget_divider">#1AFFFFFF</color>
+    <!-- Money and budget state. -->
+    <color name="widget_ok">#FF36D07F</color>
+    <color name="widget_caution">#FFEBA75C</color>
+    <color name="widget_warn">#FFFF5B4F</color>
+</resources>

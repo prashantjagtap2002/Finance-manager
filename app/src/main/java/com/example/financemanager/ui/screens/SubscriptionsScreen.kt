@@ -1,5 +1,6 @@
 package com.example.financemanager.ui.screens
 
+import com.example.financemanager.ui.components.formatDate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -27,6 +29,8 @@ import com.example.financemanager.theme.*
 import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.IosButton
 import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosTopAppBar
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import java.text.SimpleDateFormat
@@ -66,16 +70,18 @@ fun SubscriptionsScreen(
         .sortedBy { it.nextExecutionDate }
     val monthlyTotal = expenses.sumOf { monthlyCostOf(it) }
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = { Text("Subscriptions & Bills", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = "Subscriptions & Bills",
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                scrollBehavior = titleBehavior
             )
         },
         containerColor = DeepBackground
@@ -312,7 +318,7 @@ private fun SubscriptionItem(
                     style = Typography.labelMedium.copy(color = TextSecondary)
                 )
                 Text(
-                    SimpleDateFormat("dd MMM yyyy", Locale.getDefault()).format(Date(rec.nextExecutionDate)),
+                    formatDate(rec.nextExecutionDate, "dd MMM yyyy"),
                     style = Typography.labelSmall.copy(color = TextMuted)
                 )
             }

@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Sized for a phone launcher grid like the Pixel 9a's (4 or 5 columns). It opens at 4x2, and
+     it resizes down to a 2x1 strip and up to a tall card; the provider shows as many envelope
+     rows as fit (see FinanceWidgetProvider). minWidth/minHeight serve launchers before
+     Android 12, which ignore targetCell*. -->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
-    android:minWidth="180dp"
+    android:description="@string/widget_description"
+    android:initialLayout="@layout/widget_loading"
+    android:minWidth="250dp"
     android:minHeight="110dp"
-    android:updatePeriodMillis="1800000"
-    android:initialLayout="@layout/widget_layout"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="50dp"
+    android:maxResizeWidth="530dp"
+    android:maxResizeHeight="450dp"
+    android:previewLayout="@layout/widget_spending"
     android:resizeMode="horizontal|vertical"
-    android:widgetCategory="home_screen">
-</appwidget-provider>
+    android:targetCellWidth="4"
+    android:targetCellHeight="2"
+    android:updatePeriodMillis="1800000"
+    android:widgetCategory="home_screen" />

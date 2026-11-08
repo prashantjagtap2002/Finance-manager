@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextDecoration
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.financemanager.data.Account
 import com.example.financemanager.data.Debt
+import com.example.financemanager.data.Transaction
 import com.example.financemanager.data.DebtType
 import com.example.financemanager.theme.*
 import com.example.financemanager.theme.Typography
@@ -38,6 +40,8 @@ import com.example.financemanager.ui.components.IosButton
 import com.example.financemanager.ui.components.IosButtonVariant
 import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.IosCardStyle
+import com.example.financemanager.ui.components.IosTopAppBar
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import java.text.SimpleDateFormat
@@ -58,9 +62,10 @@ fun DebtScreen(
     var editingDebt by remember { mutableStateOf<Debt?>(null) }
     var showAddDialog by remember { mutableStateOf(false) }
     var paymentDebt by remember { mutableStateOf<Debt?>(null) }
+    var deletingDebt by remember { mutableStateOf<Debt?>(null) }
     var showPayoffPlanner by remember { mutableStateOf(false) }
     
-    val formatter = SimpleDateFormat("MMM dd, yyyy", Locale.getDefault())
+    val formatter = remember { SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()) }
 
     // Split based on tab
     val currentType = if (selectedTab == 0) DebtType.LENT else DebtType.BORROWED
@@ -80,11 +85,13 @@ fun DebtScreen(
     val totalToReceive = debts.filter { it.type == DebtType.LENT && !it.isSettled }.sumOf { it.amount - it.paidAmount }
     val totalToPay = debts.filter { it.type == DebtType.BORROWED && !it.isSettled }.sumOf { it.amount - it.paidAmount }
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
         containerColor = DeepBackground,
         topBar = {
-            TopAppBar(
-                title = { Text(if (selectedTab == 2) "Group Expenses" else "IOU Tracker", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = if (selectedTab == 2) "Group Expenses" else "IOU Tracker",
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
@@ -97,7 +104,7 @@ fun DebtScreen(
                         }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                scrollBehavior = titleBehavior
             )
         },
         floatingActionButton = {
@@ -308,7 +315,7 @@ fun DebtScreen(
                                                     formatter = formatter,
                                                     onPaymentClick = { paymentDebt = it },
                                                     onEditClick = { editingDebt = it },
-                                                    onDeleteClick = { viewModel.deleteDebt(it) }
+                                                    onDeleteClick = { deletingDebt = it }
                                                 )
                                             }
                                         }
@@ -350,7 +357,7 @@ fun DebtScreen(
                                         formatter = formatter,
                                         onPaymentClick = {},
                                         onEditClick = { editingDebt = it },
-                                        onDeleteClick = { viewModel.deleteDebt(it) }
+                                        onDeleteClick = { deletingDebt = it }
                                     )
                                 }
                             }
@@ -359,6 +366,55 @@ fun DebtScreen(
                 }
             }
         }
+    }
+
+    // Delete confirmation. Deleting an IOU that moved money can move it back, so say so first.
+    deletingDebt?.let { debt ->
+        // Loaded asynchronously, so the dialog says nothing about balances — and Delete waits —
+        // until it knows. Before, an immediate tap read "Account balances won't change" and then
+        // refunded anyway.
+        val refundLookup by produceState<Pair<Boolean, Transaction?>>(false to null, debt) {
+            value = true to viewModel.refundOnDelete(debt)
+        }
+        val (refundKnown, refund) = refundLookup
+        // A balance adjustment records an outflow on the source side and an inflow on the
+        // destination side (source 0), so a borrowed IOU's account is the destination.
+        val refundAccount = refund?.let { movement ->
+            val accountId = movement.sourceAccountId.takeIf { it > 0L } ?: movement.destinationAccountId
+            accounts.firstOrNull { it.id == accountId }
+        }
+        AlertDialog(
+            onDismissRequest = { deletingDebt = null },
+            title = { Text("Delete IOU with ${debt.personName}?", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            text = {
+                Text(
+                    when {
+                        !refundKnown -> "Checking whether this moves any money…"
+                        refund != null && debt.type == DebtType.LENT ->
+                            "${moneyString(refund.amount)} will go back to ${refundAccount?.name ?: "the account it came from"}."
+                        refund != null ->
+                            "${moneyString(refund.amount)} will be taken back out of ${refundAccount?.name ?: "the account it went into"}."
+                        debt.paidAmount > 0 ->
+                            "Repayments already recorded stay as they are. Account balances won't change."
+                        else -> "Account balances won't change."
+                    },
+                    style = Typography.bodyMedium.copy(color = TextSecondary)
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = refundKnown,
+                    onClick = {
+                        viewModel.deleteDebt(debt)
+                        deletingDebt = null
+                    }
+                ) { Text("Delete", color = if (refundKnown) AlertRed else TextSecondary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { deletingDebt = null }) { Text("Cancel", color = TextSecondary) }
+            },
+            containerColor = DarkSurface
+        )
     }
 
     // Record Payment Bottom Sheet
