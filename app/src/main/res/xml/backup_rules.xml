@@ -29,4 +29,7 @@
          on its own, next to a database that did NOT come back, it would tell the first sync that
          an empty device is authoritative and the user's cloud data would be deleted to match. -->
     <exclude domain="sharedpref" path="sync_state.xml"/>
+    <!-- Receipt photos are as private as the database rows they belong to, and without that
+         database they would be orphans anyway. -->
+    <exclude domain="file" path="receipts/"/>
 </full-backup-content>

@@ -8,6 +8,25 @@ import org.junit.Test
 class MoneyTest {
 
     @Test
+    fun parseInput_rejectsWhatWouldPoisonABalance() {
+        for (bad in listOf("NaN", "Infinity", "-Infinity", "-5", "0", "0.00", "", "  ", "abc", "1e400", "1e5", "12.3.4", "999999999999999")) {
+            assertEquals("'$bad' must not parse", null, Money.parseInput(bad))
+        }
+    }
+
+    @Test
+    fun parseInput_readsGroupingAndDecimalCommas() {
+        assertEquals(1234.0, Money.parseInput("1,234")!!, 0.0)
+        assertEquals(123456.0, Money.parseInput("1,23,456")!!, 0.0)
+        assertEquals(1234.5, Money.parseInput("1,234.50")!!, 0.0)
+        assertEquals(12.5, Money.parseInput("12,50")!!, 0.0)
+        assertEquals(12.5, Money.parseInput("12,5")!!, 0.0)
+        assertEquals(10.01, Money.parseInput(" 10.005 ")!!, 0.0)
+        assertEquals(500.0, Money.parseInput("500")!!, 0.0)
+        assertEquals(0.5, Money.parseInput(".5")!!, 0.0)
+    }
+
+    @Test
     fun repeatedAdditionStaysOnTheMinorUnit() {
         // 0.1 + 0.2 is 0.30000000000000004 in binary floating point, and a balance that absorbs a
         // few thousand such additions walks away from the sum of its transactions. Rounding at

@@ -19,6 +19,8 @@ import com.example.financemanager.domain.MerchantKey
 import com.example.financemanager.domain.Money
 import com.example.financemanager.domain.NlpParser
 import com.example.financemanager.domain.NlpResult
+import com.example.financemanager.domain.RecurringScheduler
+import kotlinx.coroutines.sync.withLock
 import com.example.financemanager.domain.SmsLink
 import com.example.financemanager.domain.SmsLinkDetector
 import com.example.financemanager.domain.RESOLUTION_REVERSAL
@@ -508,11 +510,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
             val formatter = java.text.SimpleDateFormat("MMM yyyy", java.util.Locale.getDefault())
             
-            // Current assets and liabilities
-            val currentAssets = accountsList.filter { it.type != AccountType.CREDIT_CARD }.sumOf { it.balance } + debtsList.filter { it.type == DebtType.LENT && !it.isSettled }.sumOf { it.amount }
-            val currentLiabilities = accountsList.filter { it.type == AccountType.CREDIT_CARD }.sumOf { it.balance } + debtsList.filter { it.type == DebtType.BORROWED && !it.isSettled }.sumOf { it.amount }
-            
-            val currentNetWorth = currentAssets - currentLiabilities
+            // Same figure the Net Worth headline shows, so the chart's last point matches it.
+            val currentNetWorth = com.example.financemanager.domain.NetWorth.of(accountsList, debtsList).netWorth
 
             // Backtrack net worth by reversing transactions
             val result = mutableMapOf<String, Double>()
@@ -575,6 +574,118 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             _cloudUserId.value = SupabaseManager.ensureSignedIn()
         }
+    }
+
+    // --- Forecast, duplicates, receipts, widget ---
+
+    /** Balance projected to the end of the pay cycle, and the envelopes that won't last it. */
+    val forecast: StateFlow<com.example.financemanager.domain.CashForecast?> = combine(
+        transactions, categories, recurringTransactions, totalBalance,
+        combine(_payCycleFrequency, _payCycleAnchorDay) { f, a -> f to a }
+    ) { txs, cats, recs, balance, _ ->
+        val (start, end) = currentPayCycleRange()
+        com.example.financemanager.domain.Forecaster.forecast(
+            now = System.currentTimeMillis(),
+            cycleStart = start,
+            cycleEnd = end,
+            currentBalance = balance,
+            cycleTransactions = txs.filter { it.date in start..end && isHomeCurrency(it.currency) },
+            categories = cats,
+            recurring = recs,
+            history = txs.filter { isHomeCurrency(it.currency) }
+        )
+    }.flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    private val _dismissedDuplicates = MutableStateFlow(FinancePreferences.dismissedDuplicates())
+
+    /** Likely double entries from the last 90 days — older ones have long since been reconciled. */
+    val duplicatePairs: StateFlow<List<com.example.financemanager.domain.DuplicatePair>> =
+        combine(transactions, _dismissedDuplicates) { txs, dismissed ->
+            val since = System.currentTimeMillis() - 90L * 24 * 60 * 60 * 1000
+            com.example.financemanager.domain.DuplicateDetector.findPairs(txs.filter { it.date >= since }, dismissed)
+        }.flowOn(Dispatchers.Default)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun dismissDuplicate(pair: com.example.financemanager.domain.DuplicatePair) {
+        _dismissedDuplicates.value = FinancePreferences.dismissDuplicate(pair.key)
+    }
+
+    /** A hand-entered transaction this alert would duplicate, if there is one. */
+    fun existingMatchFor(sms: SmsTransaction): Transaction? {
+        val amount = com.example.financemanager.domain.SmsAmountFormatter.number(sms.amount).toDoubleOrNull() ?: return null
+        return com.example.financemanager.domain.DuplicateDetector.findExisting(
+            amount, isCredit = sms.type == "credit", date = sms.rawTimestamp, transactions = transactions.value
+        )
+    }
+
+    private val receiptDao = FinanceDatabase.getDatabase(application).receiptDao()
+
+    val transactionsWithReceipts: StateFlow<Set<Long>> = receiptDao.transactionIdsWithReceipts()
+        .map { it.toSet() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
+
+    fun receiptsFor(transactionId: Long): Flow<List<Receipt>> = receiptDao.receiptsFor(transactionId)
+
+    fun attachReceipt(transactionId: Long, uri: Uri, fromCamera: Boolean, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val ok = com.example.financemanager.core.ReceiptStore.attach(getApplication(), transactionId, uri, deleteSource = fromCamera)
+            onResult(ok)
+        }
+    }
+
+    fun deleteReceipt(receipt: Receipt) {
+        viewModelScope.launch { com.example.financemanager.core.ReceiptStore.delete(getApplication(), receipt) }
+    }
+
+    init {
+        // Keep the home-screen widget in step with the data. Debounced so a bulk import redraws
+        // it once instead of once per row.
+        viewModelScope.launch {
+            @OptIn(kotlinx.coroutines.FlowPreview::class)
+            // Debts and recurring rows feed the "Coming up" widget, so their changes count too.
+            combine(
+                listOf<kotlinx.coroutines.flow.Flow<Any?>>(
+                    repository.transactions, repository.categories, repository.debts,
+                    repository.recurringTransactions, _isPrivacyMode, _payCycleFrequency, _payCycleAnchorDay
+                )
+            ) { }
+                .drop(1)
+                .debounce(1500)
+                .collect { com.example.financemanager.services.FinanceWidgetProvider.refresh(getApplication()) }
+        }
+        // Receipts whose transaction was deleted in an earlier session (and so is past its Undo).
+        viewModelScope.launch {
+            runCatching { com.example.financemanager.core.ReceiptStore.cleanUp(getApplication()) }
+        }
+        // When the SMS filter gets stricter, alerts it now rejects (shop credits, scams from phone
+        // numbers) may already be sitting in Pending. Re-check them once per filter revision; they
+        // move to Ignored, where they can still be restored.
+        val prefs = getApplication<android.app.Application>()
+            .getSharedPreferences("finance_prefs", android.content.Context.MODE_PRIVATE)
+        if (prefs.getInt(SMS_FILTER_REVISION_KEY, 0) < SMS_FILTER_REVISION) {
+            recheckPendingSms { }
+            prefs.edit().putInt(SMS_FILTER_REVISION_KEY, SMS_FILTER_REVISION).apply()
+        }
+        // Once: fill in payees the old Kotak pattern dropped (titles that read just "Kotak").
+        if (prefs.getInt(SMS_PAYEE_BACKFILL_KEY, 0) < SMS_PAYEE_BACKFILL) {
+            viewModelScope.launch(Dispatchers.IO) {
+                val fixed = runCatching { repository.backfillSmsPayees() }
+                    .onFailure { android.util.Log.e("FinanceViewModel", "Payee backfill failed", it) }
+                    .getOrNull() ?: return@launch
+                prefs.edit().putInt(SMS_PAYEE_BACKFILL_KEY, SMS_PAYEE_BACKFILL).apply()
+                if (fixed > 0) SyncWorker.enqueueNow(getApplication())
+            }
+        }
+    }
+
+    private companion object {
+        const val SMS_FILTER_REVISION_KEY = "sms_filter_revision"
+        /** Bump when [com.example.financemanager.domain.SmsParser] starts rejecting more. */
+        const val SMS_FILTER_REVISION = 2
+        const val SMS_PAYEE_BACKFILL_KEY = "sms_payee_backfill"
+        /** Bump when a parser fix recovers counterparties that existing alerts are missing. */
+        const val SMS_PAYEE_BACKFILL = 1
     }
 
     // --- Pro Tier / Monetization Simulation ---
@@ -648,71 +759,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
     }
 
     // --- Date & Streak Helpers ---
-    fun currentPayCycleRange(now: Long = System.currentTimeMillis()): Pair<Long, Long> {
-        val cal = Calendar.getInstance().apply { timeInMillis = now }
-        cal.set(Calendar.HOUR_OF_DAY, 0)
-        cal.set(Calendar.MINUTE, 0)
-        cal.set(Calendar.SECOND, 0)
-        cal.set(Calendar.MILLISECOND, 0)
-
-        return when (_payCycleFrequency.value) {
-            PayCycleFrequency.WEEKLY -> {
-                while (cal.get(Calendar.DAY_OF_MONTH) != _payCycleAnchorDay.value.coerceIn(1, 28)) {
-                    cal.add(Calendar.DAY_OF_MONTH, -1)
-                }
-                val start = cal.timeInMillis
-                cal.add(Calendar.DAY_OF_YEAR, 7)
-                start to (cal.timeInMillis - 1)
-            }
-            PayCycleFrequency.BIWEEKLY -> {
-                while (cal.get(Calendar.DAY_OF_MONTH) != _payCycleAnchorDay.value.coerceIn(1, 28)) {
-                    cal.add(Calendar.DAY_OF_MONTH, -1)
-                }
-                val start = cal.timeInMillis
-                while (start + 14L * 24 * 60 * 60 * 1000 > now && cal.timeInMillis > now) {
-                    cal.add(Calendar.DAY_OF_MONTH, -14)
-                }
-                val normalizedStart = cal.timeInMillis
-                cal.add(Calendar.DAY_OF_YEAR, 14)
-                normalizedStart to (cal.timeInMillis - 1)
-            }
-            PayCycleFrequency.SEMIMONTHLY -> {
-                val anchor = _payCycleAnchorDay.value.coerceIn(1, 28)
-                val secondAnchor = if (anchor <= 15) 15 else minOf(anchor, 28)
-                val currentDay = cal.get(Calendar.DAY_OF_MONTH)
-                if (currentDay >= secondAnchor) {
-                    cal.set(Calendar.DAY_OF_MONTH, secondAnchor)
-                    val start = cal.timeInMillis
-                    cal.add(Calendar.MONTH, 1)
-                    cal.set(Calendar.DAY_OF_MONTH, anchor)
-                    start to (cal.timeInMillis - 1)
-                } else if (currentDay >= anchor) {
-                    cal.set(Calendar.DAY_OF_MONTH, anchor)
-                    val start = cal.timeInMillis
-                    cal.set(Calendar.DAY_OF_MONTH, secondAnchor)
-                    start to (cal.timeInMillis - 1)
-                } else {
-                    cal.add(Calendar.MONTH, -1)
-                    cal.set(Calendar.DAY_OF_MONTH, secondAnchor)
-                    val start = cal.timeInMillis
-                    cal.add(Calendar.MONTH, 1)
-                    cal.set(Calendar.DAY_OF_MONTH, anchor)
-                    start to (cal.timeInMillis - 1)
-                }
-            }
-            PayCycleFrequency.MONTHLY -> {
-                val anchor = _payCycleAnchorDay.value.coerceIn(1, 28)
-                val currentDay = cal.get(Calendar.DAY_OF_MONTH)
-                if (currentDay < anchor) {
-                    cal.add(Calendar.MONTH, -1)
-                }
-                cal.set(Calendar.DAY_OF_MONTH, anchor)
-                val start = cal.timeInMillis
-                cal.add(Calendar.MONTH, 1)
-                start to (cal.timeInMillis - 1)
-            }
-        }
-    }
+    fun currentPayCycleRange(now: Long = System.currentTimeMillis()): Pair<Long, Long> =
+        com.example.financemanager.core.PayCycle.range(_payCycleFrequency.value, _payCycleAnchorDay.value, now)
 
     internal fun computeStreakDays(txList: List<Transaction>, now: Long = System.currentTimeMillis()): Int {
         if (txList.isEmpty()) return 0
@@ -1166,42 +1214,29 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         isAutoLog: Boolean = true,
         subscriptionDate: Long? = null
     ) {
+        // The screens validate too, but this is the last door before the ledger: a NaN or an
+        // infinity written here would poison the account balance permanently.
+        if (!amount.isFinite() || amount <= 0.0) return
         viewModelScope.launch {
-            // 1. Insert transaction log
-            val transId = repository.insertTransaction(
-                Transaction(
-                    amount = amount,
-                    type = type,
-                    categoryId = categoryId,
-                    sourceAccountId = accountId,
-                    destinationAccountId = if (type == TransactionType.TRANSFER) destinationAccountId else null,
-                    note = note,
-                    date = date
-                )
-            )
+            val roundedAmount = Money.roundToMinorUnit(amount)
 
-            // 2/3. Balances (source, and destination for transfers) moved by the ledger insert above.
-
-            // 3.5 Fire envelope budget alert if this expense crosses 80%/100%
-            if (type == TransactionType.EXPENSE) {
-                checkBudgetThreshold(categoryId, amount)
-            }
-
-            // 4. Register recurring template if toggle is on
-            if (isRecurring && recurringInterval != null) {
-                val nextExec = subscriptionDate ?: run {
-                    val cal = Calendar.getInstance().apply { timeInMillis = date }
-                    when (recurringInterval) {
-                        RecurringInterval.DAILY -> cal.add(Calendar.DAY_OF_YEAR, 1)
-                        RecurringInterval.WEEKLY -> cal.add(Calendar.WEEK_OF_YEAR, 1)
-                        RecurringInterval.MONTHLY -> cal.add(Calendar.MONTH, 1)
-                        RecurringInterval.YEARLY -> cal.add(Calendar.YEAR, 1)
-                    }
-                    cal.timeInMillis
+            // 1. A repeating entry gets its template first, so the payment logged now can say it
+            // is that template's occurrence. Unlinked, it read as everyday spending — the forecast
+            // then projected a monthly EMI as if it were paid every day — and nothing tied it to
+            // the schedule.
+            val recurringId = if (isRecurring && recurringInterval != null) {
+                // "Next billing date" defaults to today, which is the payment being logged right
+                // now. Left as is, the template was due immediately and the worker logged the same
+                // bill a second time on its next pass; step past the occurrence just paid.
+                var nextExec = subscriptionDate ?: date
+                while (nextExec <= date) {
+                    val advanced = RecurringScheduler.getNextIntervalDate(nextExec, recurringInterval)
+                    if (advanced <= nextExec) break
+                    nextExec = advanced
                 }
                 repository.insertRecurringTransaction(
                     RecurringTransaction(
-                        amount = amount,
+                        amount = roundedAmount,
                         type = type,
                         categoryId = categoryId,
                         accountId = accountId,
@@ -1212,8 +1247,29 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                         isAutoLog = isAutoLog
                     )
                 )
+            } else null
+
+            // 2. The transaction itself. Balances (source, and destination for transfers) move
+            // with the ledger insert.
+            repository.insertTransaction(
+                Transaction(
+                    amount = roundedAmount,
+                    type = type,
+                    categoryId = categoryId,
+                    sourceAccountId = accountId,
+                    destinationAccountId = if (type == TransactionType.TRANSFER) destinationAccountId else null,
+                    note = note,
+                    date = date,
+                    isRecurring = recurringId != null,
+                    recurringId = recurringId
+                )
+            )
+
+            // 3. Fire envelope budget alert if this expense crosses 80%/100%
+            if (type == TransactionType.EXPENSE) {
+                checkBudgetThreshold(categoryId, roundedAmount)
             }
-            
+
             // Reset amount display
             _amountInput.value = "0"
         }
@@ -1804,6 +1860,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                             put("dueDate", debt.dueDate ?: JSONObject.NULL)
                             put("paidAmount", debt.paidAmount)
                             put("notes", debt.notes)
+                            put("ledgerTransactionId", debt.ledgerTransactionId)
                         })
                     }
                     put("debts", debtsArray)
@@ -1853,6 +1910,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                         })
                     }
                     put("merchantRules", merchantRulesArray)
+
+                    // SMS Rules from Settings. Not a table, but rules the user wrote by hand are
+                    // exactly what a reinstall should not cost them.
+                    put("smsRules", com.example.financemanager.core.SmsRuleStore.exportJson())
+                    put("insightLayout", com.example.financemanager.core.InsightLayoutStore.exportJson())
 
                     // 9. Shared-expense groups, their members and their receipts
                     val groupsArray = JSONArray()
@@ -2047,7 +2109,8 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                             date = obj.getLong("date"),
                             dueDate = due,
                             paidAmount = obj.optDouble("paidAmount", 0.0),
-                            notes = obj.optString("notes", "")
+                            notes = obj.optString("notes", ""),
+                            ledgerTransactionId = obj.optLong("ledgerTransactionId", 0L)
                         ))
                     }
                 }
@@ -2147,6 +2210,10 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     }
                 }
 
+                // Receipts aren't in the backup; note which rows they belong to so a restore that
+                // reuses those ids for other transactions doesn't leave photos on the wrong rows.
+                val receiptFingerprints = com.example.financemanager.core.ReceiptStore.fingerprints(getApplication())
+
                 // Wipe existing database and restore backup
                 repository.replaceBackupData(
                     accountsList, categoriesList, transactionsList, recurringList, goalsList,
@@ -2160,6 +2227,16 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
                 // Older backups have no opening balances, so derive them from what was restored.
                 repository.rebaseOpeningBalances()
+                com.example.financemanager.core.ReceiptStore.dropMismatched(getApplication(), receiptFingerprints)
+
+                // Only once the database restore has gone through: applied earlier, a backup that
+                // failed half-way still replaced the rules and layout while the data stayed put.
+                rootJson.optJSONObject("smsRules")?.let {
+                    com.example.financemanager.core.SmsRuleStore.importJson(getApplication(), it)
+                }
+                rootJson.optJSONObject("insightLayout")?.let {
+                    com.example.financemanager.core.InsightLayoutStore.importJson(getApplication(), it)
+                }
 
                 onSuccess()
             } catch (e: Exception) {
@@ -2208,6 +2285,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             repository.updateDebt(debt)
         }
     }
+
+    /** What deleting [debt] would give back, for the confirmation dialog. See [FinanceRepository.refundOnDelete]. */
+    suspend fun refundOnDelete(debt: Debt): Transaction? = repository.refundOnDelete(debt)
 
     fun deleteDebt(debt: Debt) {
         viewModelScope.launch {
@@ -2290,6 +2370,38 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             )
         }
     )
+
+    /**
+     * Logs a manual payment that is really a loan: someone asked for money, the user paid it, and
+     * the account drops while an IOU records that it is owed back. [type] LENT takes the money out
+     * of [accountId]; BORROWED puts it in.
+     */
+    fun addIouTransaction(
+        amount: Double,
+        type: DebtType,
+        accountId: Long,
+        personName: String,
+        note: String,
+        date: Long,
+        dueDate: Long?
+    ) {
+        val cleanName = personName.trim()
+        if (amount <= 0.0 || accountId <= 0L || cleanName.isEmpty()) return
+        viewModelScope.launch {
+            repository.openIou(
+                Debt(
+                    personName = cleanName,
+                    amount = Money.roundToMinorUnit(amount),
+                    type = type,
+                    date = date,
+                    dueDate = dueDate,
+                    notes = note.trim()
+                ),
+                accountId = accountId
+            )
+            SyncWorker.enqueueNow(getApplication())
+        }
+    }
 
     fun recordDebtPayment(debt: Debt, paymentAmount: Double, account: Account) {
         viewModelScope.launch {
@@ -2386,8 +2498,17 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             }
             return
         }
-        viewModelScope.launch {
-            clearPreviousFiling(smsTransaction)
+        viewModelScope.launch { smsApprovalLock.withLock {
+            // Re-read the row under the lock. Two approvals of the same alert (a swipe and a tap
+            // during its exit animation) each held a copy saying "not yet logged", so both
+            // inserted a transaction and moved the balance twice, and Undo could only find the
+            // second. Serialised, the second one now sees the first one's filing and stops —
+            // unless its copy *is* that filing, which is a deliberate re-file and still allowed.
+            val fresh = repository.getSmsTransactionById(smsTransaction.id) ?: return@withLock
+            if (fresh.isApproved && fresh.loggedTransactionId != 0L && fresh.loggedTransactionId != smsTransaction.loggedTransactionId) {
+                return@withLock
+            }
+            clearPreviousFiling(fresh)
             val txType = txTypeOverride ?: if (smsTransaction.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE
 
             val finalNote = note.ifEmpty {
@@ -2411,7 +2532,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             // Balance moved by the ledger insert above.
 
             repository.updateSmsTransaction(
-                smsTransaction.copy(
+                fresh.copy(
                     isApproved = true,
                     isIgnored = false,
                     approvedCategoryId = categoryId,
@@ -2426,8 +2547,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
             repository.rememberMerchantCategory(smsTransaction.counterparty, categoryId, accountId)
 
             SyncWorker.enqueueNow(getApplication())
-        }
+        } }
     }
+
+    /** Serialises [approveSmsTransaction] so two approvals of one alert can't both log it. */
+    private val smsApprovalLock = kotlinx.coroutines.sync.Mutex()
 
     /**
      * Creates an IOU from an SMS approval. The SMS still needs to affect the account balance,
@@ -2682,6 +2806,68 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    /**
+     * Re-reads every pending alert with the current parser, after the user changes their SMS
+     * rules. Only pending ones: an approved alert already became a transaction, and changing its
+     * fields under it would leave the two disagreeing.
+     *
+     * An alert the new rules no longer recognise is left alone rather than deleted — a rule
+     * being edited is often half-written, and the alert is still real. One an Ignore rule now
+     * matches is moved to Ignored, where it can be restored.
+     */
+    fun recheckPendingSms(onDone: (String) -> Unit) {
+        viewModelScope.launch {
+            var updated = 0
+            var ignored = 0
+            val pending = repository.getSmsTransactionsList()
+                // Rows from the notification listener carry a package name as sender and the
+                // notification text as body. Re-read as SMS they match no bank and get moved to
+                // Ignored, so they are left to the parser that produced them.
+                .filter {
+                    !it.isApproved && !it.isIgnored && it.body.isNotBlank() &&
+                        it.sender !in com.example.financemanager.domain.NotificationTransactionParser.TRUSTED_PACKAGES
+                }
+            for (sms in pending) {
+                val result = com.example.financemanager.domain.SmsParser.parseDetailed(sms.sender, sms.body)
+                val parsed = result.parsed
+                if (parsed == null) {
+                    val source = result.source
+                    val rule = (source as? com.example.financemanager.domain.SmsParseSource.Custom)?.rule
+                    // Marketing and shop/app "credits" are positively identified as not being bank
+                    // alerts, unlike a merely unrecognised message, so they are filed away too.
+                    if (rule?.action == com.example.financemanager.domain.SmsRuleAction.IGNORE ||
+                        source == com.example.financemanager.domain.SmsParseSource.PromoFiltered ||
+                        source == com.example.financemanager.domain.SmsParseSource.NotFromBank
+                    ) {
+                        repository.updateSmsTransaction(sms.copy(isIgnored = true))
+                        ignored++
+                    }
+                    continue
+                }
+                val refreshed = sms.copy(
+                    accountName = parsed.accountName,
+                    type = parsed.type,
+                    amount = parsed.amount,
+                    balance = parsed.balance,
+                    counterparty = parsed.counterparty,
+                    reference = parsed.reference
+                )
+                if (refreshed != sms) {
+                    repository.updateSmsTransaction(refreshed)
+                    updated++
+                }
+            }
+            if (updated > 0 || ignored > 0) SyncWorker.enqueueNow(getApplication())
+            onDone(
+                when {
+                    pending.isEmpty() -> "No pending alerts with message text to re-check"
+                    updated == 0 && ignored == 0 -> "Checked ${pending.size} pending alert(s) — nothing changed"
+                    else -> "Updated $updated, ignored $ignored of ${pending.size} pending alert(s)"
+                }
+            )
+        }
+    }
+
     fun ignoreSmsTransaction(smsTransaction: SmsTransaction) {
         viewModelScope.launch {
             repository.updateSmsTransaction(smsTransaction.copy(isIgnored = true))
@@ -2697,6 +2883,18 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
      * with nothing pointing at it — and the alert, now pending again, could be approved a second
      * time for the same money.
      */
+    /**
+     * Undo for the quick-review screen. Re-reads the alert first: the copy the screen holds was
+     * taken before it was approved, so it doesn't know which transaction the approval created and
+     * restoring from it would leave that transaction behind.
+     */
+    fun returnSmsToPending(smsId: Long) {
+        viewModelScope.launch {
+            val fresh = repository.getSmsTransactionById(smsId) ?: return@launch
+            unignoreSmsTransaction(fresh)
+        }
+    }
+
     fun unignoreSmsTransaction(smsTransaction: SmsTransaction) {
         viewModelScope.launch {
             clearPreviousFiling(smsTransaction)

@@ -17,6 +17,7 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.example.financemanager.ui.components.IosTopAppBar
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -63,14 +64,14 @@ fun SearchScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = { Text("Search Transactions", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = "Search Transactions",
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                isLargeTitle = false
             )
         },
         containerColor = DeepBackground
@@ -135,7 +136,7 @@ fun SearchScreen(
                         onClick = { selectedCategoryId = category.id },
                         label = { Text(category.name, color = if (isSelected) DeepBackground else TextPrimary) },
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(android.graphics.Color.parseColor(category.colorHex)),
+                            selectedContainerColor = paletteTone(category.colorHex),
                             containerColor = DarkSurface
                         ),
                         border = FilterChipDefaults.filterChipBorder(
@@ -176,9 +177,7 @@ fun SearchScreen(
                             transaction = tx,
                             accountName = accountsById[tx.sourceAccountId]?.name ?: "Unknown",
                             categoryName = catName,
-                            privacy = isPrivacy,
-                            onEdit = { },
-                            onDelete = { }
+                            privacy = isPrivacy
                         )
                     }
                 }

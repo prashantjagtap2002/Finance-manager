@@ -74,13 +74,13 @@ object PdfGenerator {
         paint.textSize = 12f
         paint.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
         
-        paint.color = Color.parseColor("#10B981") // Green
+        paint.color = Color.parseColor("#0F8043") // Green
         currentCanvas.drawText("Total Income: ${moneyString(income, false)}", 40f, 190f, paint)
         
-        paint.color = Color.parseColor("#F44336") // Red
+        paint.color = Color.parseColor("#D93025") // Red
         currentCanvas.drawText("Total Expenses: ${moneyString(expenses, false)}", 40f, 210f, paint)
         
-        paint.color = if (net >= 0) Color.parseColor("#10B981") else Color.parseColor("#F44336")
+        paint.color = if (net >= 0) Color.parseColor("#0F8043") else Color.parseColor("#D93025")
         currentCanvas.drawText("Net Savings: ${moneyString(net.absoluteValue, false)}" + if (net < 0) " (Loss)" else "", 40f, 230f, paint)
 
         // Transactions Table Header
@@ -144,8 +144,8 @@ object PdfGenerator {
             currentCanvas.drawText(catName, 320f, yPos, paint)
             
             val amtColor = when (tx.type) {
-                TransactionType.INCOME -> Color.parseColor("#10B981")
-                TransactionType.EXPENSE -> Color.parseColor("#F44336")
+                TransactionType.INCOME -> Color.parseColor("#0F8043")
+                TransactionType.EXPENSE -> Color.parseColor("#D93025")
                 TransactionType.TRANSFER -> Color.DKGRAY
             }
             val sign = if (tx.type == TransactionType.EXPENSE) "-" else if (tx.type == TransactionType.INCOME) "+" else ""

@@ -11,8 +11,8 @@ import androidx.room.migration.Migration;
 import java.security.SecureRandom;
 
 @Database(
-    entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class, MerchantRule.class, Investment.class, InvestmentTransaction.class, ExpenseGroup.class, ExpenseGroupMember.class, ExpenseGroupExpense.class, DeletedRecord.class},
-    version = 21,
+    entities = {Account.class, Category.class, Transaction.class, RecurringTransaction.class, SavingsGoal.class, Debt.class, SmsTransaction.class, MerchantRule.class, Investment.class, InvestmentTransaction.class, ExpenseGroup.class, ExpenseGroupMember.class, ExpenseGroupExpense.class, DeletedRecord.class, Receipt.class},
+    version = 23,
     // Exported schemas are what MigrationTestHelper replays old databases against. Without them
     // nothing checks that the hand-written migrations below still agree with the entities.
     exportSchema = true
@@ -25,6 +25,9 @@ public abstract class FinanceDatabase extends RoomDatabase {
      * write-then-adjust pairs atomic.
      */
     public abstract FinanceDao financeDao();
+
+    /** Receipt photos. Separate from {@link #dao()}: receipts are local-only and never touch the ledger. */
+    public abstract ReceiptDao receiptDao();
 
     private volatile FinanceDao transactionalDao;
 
@@ -399,6 +402,36 @@ public abstract class FinanceDatabase extends RoomDatabase {
         }
     };
 
+    /**
+     * Lets an IOU opened from Quick Transaction say which ledger row moved its money, so deleting
+     * it can give that money back. Existing debts keep 0: they moved no money, or predate the link.
+     */
+    public static final Migration MIGRATION_21_22 = new Migration(21, 22) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "ALTER TABLE debts ADD COLUMN ledgerTransactionId INTEGER NOT NULL DEFAULT 0"
+            );
+        }
+    };
+
+    /** Receipt photos attached to transactions. A new local-only table; nothing existing changes. */
+    public static final Migration MIGRATION_22_23 = new Migration(22, 23) {
+        @Override
+        public void migrate(SupportSQLiteDatabase database) {
+            database.execSQL(
+                "CREATE TABLE IF NOT EXISTS `receipts` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`transactionId` INTEGER NOT NULL, " +
+                "`fileName` TEXT NOT NULL, " +
+                "`createdAt` INTEGER NOT NULL)"
+            );
+            database.execSQL(
+                "CREATE INDEX IF NOT EXISTS `index_receipts_transactionId` ON `receipts` (`transactionId`)"
+            );
+        }
+    };
+
     public static FinanceDatabase getDatabase(final Context context) {
         if (INSTANCE == null) {
             synchronized (FinanceDatabase.class) {
@@ -408,7 +441,7 @@ public abstract class FinanceDatabase extends RoomDatabase {
                         FinanceDatabase.class,
                         "finance_database"
                     )
-                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21)
+                    .addMigrations(MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10, MIGRATION_10_11, MIGRATION_11_12, MIGRATION_12_13, MIGRATION_13_14, MIGRATION_14_15, MIGRATION_15_16, MIGRATION_16_17, MIGRATION_17_18, MIGRATION_18_19, MIGRATION_19_20, MIGRATION_20_21, MIGRATION_21_22, MIGRATION_22_23)
                     // The migration chain starts at 2: there is no record of what version 1 looked
                     // like, so no 1 -> 2 migration can be written. Room's answer to a missing
                     // migration is to throw on open, which for a version-1 database means an app

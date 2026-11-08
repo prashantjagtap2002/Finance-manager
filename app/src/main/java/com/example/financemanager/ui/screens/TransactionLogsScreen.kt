@@ -1,11 +1,15 @@
 package com.example.financemanager.ui.screens
 
+import com.example.financemanager.ui.components.formatDate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import com.example.financemanager.ui.components.ReceiptSection
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.*
@@ -17,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import android.widget.Toast
@@ -26,8 +31,12 @@ import com.example.financemanager.theme.*
 import com.example.financemanager.ui.components.IosCard
 import com.example.financemanager.ui.components.IosButton
 import com.example.financemanager.ui.components.IosButtonVariant
+import com.example.financemanager.ui.components.IosTopAppBar
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
 import com.example.financemanager.ui.components.moneyString
 import com.example.financemanager.ui.components.EmptyState
+import com.example.financemanager.ui.components.SwipeActionsBox
+import androidx.compose.ui.text.style.TextOverflow
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import com.example.financemanager.domain.NlpParser
 import kotlinx.coroutines.Dispatchers
@@ -131,10 +140,12 @@ fun TransactionLogsScreen(
         accounts.filter { it.type == AccountType.BANK }.sortedBy { it.name.lowercase() }
     }
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
         topBar = {
-            TopAppBar(
-                title = { Text("Transaction Logs", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = "Transaction Logs",
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
@@ -155,7 +166,7 @@ fun TransactionLogsScreen(
                         Icon(Icons.Default.FileDownload, contentDescription = "Export CSV", tint = SecondaryTeal)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                scrollBehavior = titleBehavior
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -276,10 +287,20 @@ fun TransactionLogsScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // Rows no longer carry edit/delete buttons, so the gestures need saying once.
+            if (filteredTransactions.isNotEmpty()) {
+                Text(
+                    "Tap a row to edit · swipe left to delete",
+                    style = Typography.labelSmall.copy(color = TextMuted),
+                    modifier = Modifier.padding(start = 4.dp, bottom = 8.dp)
+                )
+            }
+
             // Indexed once per data change instead of scanned once per visible row: every row
             // that scrolls into view was doing a linear search through both lists to find its
             // account and category name.
             val accountsById = remember(accounts) { accounts.associateBy { it.id } }
+            val receiptIds by viewModel.transactionsWithReceipts.collectAsStateWithLifecycle()
             val categoriesById = remember(categories) { categories.associateBy { it.id } }
 
             // Logs List
@@ -311,18 +332,9 @@ fun TransactionLogsScreen(
                     val category = categoriesById[transaction.categoryId]
                     val categoryName = category?.name ?: "Income/Transfer"
 
-                    val dismissState = rememberSwipeToDismissBoxState(confirmValueChange = { value ->
-                        if (value == SwipeToDismissBoxValue.EndToStart) pendingDelete = transaction
-                        value != SwipeToDismissBoxValue.EndToStart
-                    })
-                    SwipeToDismissBox(
-                        state = dismissState,
-                        backgroundContent = {
-                            Box(Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)).background(AlertRed).padding(horizontal = 20.dp), contentAlignment = Alignment.CenterEnd) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete transaction", tint = Color.White)
-                            }
-                        },
-                        enableDismissFromStartToEnd = false,
+                    SwipeActionsBox(
+                        onEdit = { editingTransaction = transaction },
+                        onDelete = { pendingDelete = transaction },
                         modifier = Modifier.animateItem()
                     ) {
                         LogItem(
@@ -331,8 +343,8 @@ fun TransactionLogsScreen(
                             categoryName = categoryName,
                             tags = viewModel.extractTags(transaction.note),
                             onTagClick = { tag -> searchQuery = tag },
-                            onEditClick = { editingTransaction = transaction },
-                            onDeleteClick = { pendingDelete = transaction }
+                            onClick = { editingTransaction = transaction },
+                            hasReceipt = transaction.id in receiptIds
                         )
                     }
                 }
@@ -395,7 +407,8 @@ fun TransactionLogsScreen(
                 )
                 viewModel.updateTransaction(transaction, newTrans)
                 editingTransaction = null
-            }
+            },
+            extraContent = { com.example.financemanager.ui.components.ReceiptSection(viewModel, transaction.id) }
         )
     }
 }
@@ -408,8 +421,8 @@ fun LogItem(
     categoryName: String,
     tags: List<String>,
     onTagClick: (String) -> Unit,
-    onEditClick: () -> Unit,
-    onDeleteClick: () -> Unit,
+    onClick: () -> Unit,
+    hasReceipt: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val amountColor = when (transaction.type) {
@@ -422,27 +435,83 @@ fun LogItem(
         TransactionType.INCOME -> "+"
         TransactionType.TRANSFER -> ""
     }
+    val typeIcon = when (transaction.type) {
+        TransactionType.EXPENSE -> Icons.Default.ArrowDownward
+        TransactionType.INCOME -> Icons.Default.ArrowUpward
+        TransactionType.TRANSFER -> Icons.Default.SwapHoriz
+    }
 
-    val dateFormatter = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
-    val formattedDate = dateFormatter.format(Date(transaction.date))
+    val formattedDate = remember(transaction.date) { formatLogDate(transaction.date) }
 
+    // Two lines that each pair a left label with a right value — title/amount, then
+    // category·account/date — so the row reads like a statement line. Edit is a tap on
+    // the row and delete is a swipe (SwipeActionsBox), which gives the text the width
+    // that two icon buttons used to take.
     IosCard(
         modifier = modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+                .background(DarkSurface)
+                .clickable(onClick = onClick)
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(amountColor.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(typeIcon, contentDescription = transaction.type.name, tint = amountColor, modifier = Modifier.size(18.dp))
+            }
+
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = transaction.note.ifEmpty { "Transaction" },
-                    style = Typography.titleMedium.copy(color = TextPrimary)
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = transaction.note.ifEmpty { "Transaction" },
+                        style = Typography.titleMedium.copy(color = TextPrimary),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = "$sign${moneyString(transaction.amount)}",
+                        style = Typography.titleMedium.copy(color = amountColor, fontWeight = FontWeight.Bold),
+                        maxLines = 1
+                    )
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = "$categoryName • $accountName",
+                        style = Typography.labelMedium.copy(color = TextSecondary),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    if (hasReceipt) {
+                        Icon(
+                            Icons.Default.AttachFile,
+                            contentDescription = "Has receipt",
+                            tint = TextMuted,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Spacer(modifier = Modifier.width(2.dp))
+                    }
+                    Text(
+                        text = formattedDate,
+                        style = Typography.labelSmall.copy(color = TextMuted),
+                        maxLines = 1
+                    )
+                }
                 if (tags.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -460,34 +529,15 @@ fun LogItem(
                         }
                     }
                 }
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "$categoryName • $accountName",
-                    style = Typography.labelMedium.copy(color = TextSecondary)
-                )
-                Text(
-                    text = formattedDate,
-                    style = Typography.labelSmall.copy(color = TextMuted)
-                )
-            }
-
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "$sign ${moneyString(transaction.amount)}",
-                    style = Typography.titleMedium.copy(color = amountColor, fontWeight = FontWeight.Bold)
-                )
-                IconButton(onClick = onEditClick) {
-                    Icon(Icons.Default.Edit, contentDescription = "Edit", tint = SecondaryTeal, modifier = Modifier.size(20.dp))
-                }
-                IconButton(onClick = onDeleteClick) {
-                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = AlertRed, modifier = Modifier.size(20.dp))
-                }
             }
         }
     }
+}
+
+/** "02 Oct, 9:47 am" this year, "02 Oct 2025" otherwise — the year only earns its width when it differs. */
+private fun formatLogDate(millis: Long): String {
+    val sameYear = formatDate(millis, "yyyy") == formatDate(System.currentTimeMillis(), "yyyy")
+    return formatDate(millis, if (sameYear) "dd MMM, h:mm a" else "dd MMM yyyy")
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -498,7 +548,9 @@ fun EditTransactionDialog(
     categories: List<Category>,
     onDismiss: () -> Unit,
     onConfirm: (amount: Double, account: Account, category: Category?, note: String, date: Long) -> Unit,
-    onSplitClick: (() -> Unit)? = null
+    onSplitClick: (() -> Unit)? = null,
+    /** Rendered at the bottom of the form; the receipt photos for this transaction. */
+    extraContent: (@Composable () -> Unit)? = null
 ) {
     var amountStr by remember { mutableStateOf(transaction.amount.toString()) }
     var note by remember { mutableStateOf(transaction.note) }
@@ -517,7 +569,6 @@ fun EditTransactionDialog(
     val selectedDate = remember { java.util.Calendar.getInstance().apply { timeInMillis = transaction.date } }
     var showDatePicker by remember { mutableStateOf(false) }
     val datePickerState = rememberDatePickerState(initialSelectedDateMillis = transaction.date)
-    val dateFormatter = java.text.SimpleDateFormat("dd MMM yyyy", Locale.getDefault())
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -525,7 +576,9 @@ fun EditTransactionDialog(
         text = {
             Column(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
             ) {
                 OutlinedTextField(
                     value = amountStr,
@@ -556,7 +609,7 @@ fun EditTransactionDialog(
                 ) {
                     Text("Date", style = Typography.bodyMedium.copy(color = TextSecondary))
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(dateFormatter.format(selectedDate.time), style = Typography.bodyMedium.copy(color = TextPrimary))
+                        Text(com.example.financemanager.ui.components.formatDate(selectedDate.timeInMillis, "dd MMM yyyy"), style = Typography.bodyMedium.copy(color = TextPrimary))
                         Icon(Icons.Default.CalendarToday, contentDescription = "Select Date", tint = SecondaryTeal, modifier = Modifier.size(18.dp))
                     }
                 }
@@ -625,6 +678,8 @@ fun EditTransactionDialog(
                         Text("Split Transaction", color = PrimaryViolet)
                     }
                 }
+
+                extraContent?.invoke()
             }
         },
         confirmButton = {

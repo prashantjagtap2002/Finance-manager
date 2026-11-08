@@ -168,7 +168,7 @@ dependencies {
     // Extended Icons
     implementation(libs.androidx.compose.material.icons.extended)
     // QR rendering for UPI settlement links
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("com.google.zxing:core:3.5.4")
 
     // Supabase (cloud sync + anonymous auth)
     implementation(platform(libs.supabase.bom))

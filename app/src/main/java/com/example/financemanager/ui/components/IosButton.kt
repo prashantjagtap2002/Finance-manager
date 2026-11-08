@@ -5,10 +5,15 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LocalRippleConfiguration
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.ProvideTextStyle
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
@@ -50,6 +55,7 @@ enum class IosButtonSize {
     Small    // 34dp
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun IosButton(
     onClick: () -> Unit,
@@ -92,22 +98,32 @@ fun IosButton(
             if (accentColor.luminance() > 0.45f) Color(0xFF0C0E12) else Color.White
     }
 
-    Button(
-        onClick = onClick,
-        modifier = modifier.height(height),
-        enabled = enabled,
-        shape = RoundedCornerShape(FieldRadius),
-        border = if (variant == IosButtonVariant.Outlined) BorderStroke(1.dp, BorderColor) else null,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = backgroundColor,
-            contentColor = contentColor,
-            disabledContainerColor = backgroundColor.copy(alpha = backgroundColor.alpha * 0.4f),
-            disabledContentColor = contentColor.copy(alpha = 0.38f)
-        ),
-        contentPadding = padding
-    ) {
-        ProvideTextStyle(textStyle) {
-            content()
+    // Apple-style direct manipulation: the button gives under the finger the instant it is
+    // pressed and springs back on release. That shrink *is* the feedback, so the Material ripple
+    // is switched off rather than layered on top of it.
+    val interactionSource = remember { MutableInteractionSource() }
+
+    CompositionLocalProvider(LocalRippleConfiguration provides null) {
+        Button(
+            onClick = onClick,
+            modifier = modifier
+                .height(height)
+                .pressScale(interactionSource),
+            enabled = enabled,
+            interactionSource = interactionSource,
+            shape = RoundedCornerShape(FieldRadius),
+            border = if (variant == IosButtonVariant.Outlined) BorderStroke(1.dp, BorderColor) else null,
+            colors = ButtonDefaults.buttonColors(
+                containerColor = backgroundColor,
+                contentColor = contentColor,
+                disabledContainerColor = backgroundColor.copy(alpha = backgroundColor.alpha * 0.4f),
+                disabledContentColor = contentColor.copy(alpha = 0.38f)
+            ),
+            contentPadding = padding
+        ) {
+            ProvideTextStyle(textStyle) {
+                content()
+            }
         }
     }
 }

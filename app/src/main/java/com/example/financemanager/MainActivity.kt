@@ -58,6 +58,8 @@ class MainActivity : FragmentActivity() {
         requestHighRefreshRate()
 
         FinancePreferences.init(this)
+        com.example.financemanager.core.SmsRuleStore.ensureLoaded(this)
+        com.example.financemanager.core.InsightLayoutStore.ensureLoaded(this)
         AppLock.init(this)
         val prefs = getSharedPreferences("finance_prefs", Context.MODE_PRIVATE)
 
@@ -110,9 +112,10 @@ class MainActivity : FragmentActivity() {
 
             FinanceManagerTheme(themeMode = themeMode) {
                 // Keep balances out of the recents thumbnail and out of screenshots while the
-                // lock is armed. Reading the snapshot state here re-runs this when it's toggled.
-                val lockArmed = AppLock.isEnabled
-                LaunchedEffect(lockArmed) { applySecureFlag(lockArmed) }
+                // lock is armed, unless the user has chosen to allow screenshots. Reading the
+                // snapshot state here re-runs this when either is toggled.
+                val secure = AppLock.isEnabled && !FinancePreferences.allowScreenshots
+                LaunchedEffect(secure) { applySecureFlag(secure) }
 
                 Surface(
                     modifier = Modifier.fillMaxSize(),
@@ -168,22 +171,44 @@ class MainActivity : FragmentActivity() {
         }
     }
 
-    /** Registers the two periodic workers. KEEP means re-registering on every launch is free. */
+    /** Registers the two periodic workers. Re-registering on every launch is free. */
     private fun scheduleBackgroundWork() {
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "RecurringTxWorker",
+        // The daily pass raises bill reminders, so it is anchored to the morning: registered with
+        // no delay it ran at whatever time of day the app was first opened — sometimes 2 a.m.
+        // It runs under a new name because KEEP would hold on to the old, unanchored schedule.
+        val workManager = WorkManager.getInstance(this)
+        workManager.cancelUniqueWork("RecurringTxWorker")
+        workManager.enqueueUniquePeriodicWork(
+            "DailyMorningWorker",
             ExistingPeriodicWorkPolicy.KEEP,
-            PeriodicWorkRequestBuilder<RecurringTransactionWorker>(1, TimeUnit.DAYS).build()
+            PeriodicWorkRequestBuilder<RecurringTransactionWorker>(1, TimeUnit.DAYS)
+                .setInitialDelay(millisUntilNext(hour = 9), TimeUnit.MILLISECONDS)
+                .build()
         )
+        // UPDATE rather than KEEP so an install whose job predates SyncWorker.TAG picks the tag up;
+        // it keeps the job's schedule and attempt count, so re-registering is still free.
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "CloudSyncWorker",
-            ExistingPeriodicWorkPolicy.KEEP,
+            ExistingPeriodicWorkPolicy.UPDATE,
             PeriodicWorkRequestBuilder<SyncWorker>(12, TimeUnit.HOURS)
+                .addTag(SyncWorker.TAG)
                 .setConstraints(
                     Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
                 )
                 .build()
         )
+    }
+
+    private fun millisUntilNext(hour: Int): Long {
+        val now = java.util.Calendar.getInstance()
+        val next = (now.clone() as java.util.Calendar).apply {
+            set(java.util.Calendar.HOUR_OF_DAY, hour)
+            set(java.util.Calendar.MINUTE, 0)
+            set(java.util.Calendar.SECOND, 0)
+            set(java.util.Calendar.MILLISECOND, 0)
+            if (!after(now)) add(java.util.Calendar.DAY_OF_YEAR, 1)
+        }
+        return next.timeInMillis - now.timeInMillis
     }
 
     override fun onStart() {

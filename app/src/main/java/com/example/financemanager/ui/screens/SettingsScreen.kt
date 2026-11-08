@@ -18,6 +18,9 @@ import androidx.compose.runtime.*
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.example.financemanager.ui.components.IosTopAppBar
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -48,7 +51,8 @@ fun SettingsScreen(
     viewModel: FinanceViewModel,
     onNavigateBack: () -> Unit,
     onNavigateToSubscriptions: () -> Unit = {},
-    onNavigateToSmsTransactions: () -> Unit = {}
+    onNavigateToSmsTransactions: () -> Unit = {},
+    onNavigateToSmsRules: () -> Unit = {}
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val snackbarScope = rememberCoroutineScope()
@@ -71,18 +75,32 @@ fun SettingsScreen(
     val isProUser by viewModel.isProUser.collectAsStateWithLifecycle()
     val scanCount by viewModel.scanCount.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    // Polled while Settings is open, so tapping Sync Now visibly moves through "Syncing now…" to
+    // a result. The outcome comes from SyncWorker's own timestamps: WorkManager only reports
+    // FAILED once it gives up, which a retrying sync never does.
     val syncStatus by produceState("Automatic sync is enabled every 12 hours", context) {
-        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            runCatching {
-                WorkManager.getInstance(context).getWorkInfosForUniqueWork("CloudSyncWorker").get()
-            }.getOrNull()?.let { infos ->
+        while (true) {
+            value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                val infos = runCatching {
+                    WorkManager.getInstance(context).getWorkInfosByTag(SyncWorker.TAG).get()
+                }.getOrNull().orEmpty()
+                val lastSuccess = SyncWorker.lastSuccessAt(context)
                 when {
                     infos.any { it.state == androidx.work.WorkInfo.State.RUNNING } -> "Syncing now…"
-                    infos.any { it.state == androidx.work.WorkInfo.State.FAILED } -> "Last sync failed — tap Sync Now to retry"
-                    infos.any { it.state == androidx.work.WorkInfo.State.SUCCEEDED } -> "Cloud sync is up to date"
+                    SyncWorker.lastFailureAt(context) > lastSuccess -> when (SyncWorker.lastFailureReason(context)) {
+                        SyncWorker.FAILURE_OWNERSHIP ->
+                            "Sync blocked: your cloud data belongs to an earlier sign-in"
+                        SyncWorker.FAILURE_SIGN_IN ->
+                            "Couldn't reach cloud sign-in — retrying automatically"
+                        else -> "Last sync failed — retrying automatically"
+                    }
+                    lastSuccess > 0 -> "Last synced " + java.text.SimpleDateFormat(
+                        "d MMM, h:mm a", java.util.Locale.getDefault()
+                    ).format(java.util.Date(lastSuccess))
                     else -> "Automatic sync is enabled every 12 hours"
                 }
-            } ?: "Automatic sync is enabled every 12 hours"
+            }
+            kotlinx.coroutines.delay(3_000)
         }
     }
 
@@ -135,17 +153,19 @@ fun SettingsScreen(
         }
     )
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = { Text("Settings", style = Typography.titleLarge.copy(color = TextPrimary)) },
+            IosTopAppBar(
+                title = "Settings",
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = TextPrimary)
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                scrollBehavior = titleBehavior
             )
         },
         containerColor = DeepBackground
@@ -368,6 +388,25 @@ fun SettingsScreen(
                                     style = Typography.labelLarge.copy(color = PrimaryViolet)
                                 )
                             }
+                            HorizontalDivider(color = BorderColor, modifier = Modifier.padding(vertical = 8.dp))
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text("Allow Screenshots", style = Typography.bodyLarge)
+                                    Text(
+                                        "Let screenshots and the recents preview show the app while it's locked",
+                                        style = Typography.labelMedium.copy(color = TextSecondary)
+                                    )
+                                }
+                                Switch(
+                                    checked = FinancePreferences.allowScreenshots,
+                                    onCheckedChange = { FinancePreferences.setAllowScreenshots(it) },
+                                    colors = SwitchDefaults.colors(checkedTrackColor = AccentGreen)
+                                )
+                            }
                         }
                         HorizontalDivider(color = BorderColor, modifier = Modifier.padding(vertical = 8.dp))
                         Row(
@@ -437,6 +476,31 @@ fun SettingsScreen(
                             Text("SMS Transactions", style = Typography.bodyLarge.copy(fontWeight = FontWeight.Bold))
                             Text(
                                 "Auto-captured bank SMS with approve/review flow",
+                                style = Typography.labelMedium.copy(color = TextSecondary)
+                            )
+                        }
+                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextSecondary)
+                    }
+                }
+            }
+            // SMS Rules
+            item {
+                IosCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onNavigateToSmsRules() }
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("SMS Rules", style = Typography.bodyLarge.copy(fontWeight = FontWeight.Bold))
+                            Text(
+                                "Teach the app new bank SMS formats, test messages, switch built-in banks on or off",
                                 style = Typography.labelMedium.copy(color = TextSecondary)
                             )
                         }
@@ -522,7 +586,9 @@ fun SettingsScreen(
                             Text(syncStatus, style = Typography.labelMedium.copy(color = if (syncStatus.contains("failed", true)) AlertRed else AccentGreen))
                             IosButton(
                                 onClick = {
-                                    val request = OneTimeWorkRequestBuilder<SyncWorker>().build()
+                                    val request = OneTimeWorkRequestBuilder<SyncWorker>()
+                                        .addTag(SyncWorker.TAG)
+                                        .build()
                                     WorkManager.getInstance(context).enqueue(request)
                                     notify("Cloud sync started in the background")
                                 },

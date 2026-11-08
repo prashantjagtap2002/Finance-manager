@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_label">Spending today</string>
+    <string name="widget_description">Today\'s spending, this cycle\'s total and your tightest envelopes, with a one-tap quick add.</string>
+    <string name="widget_quick_add">Quick add transaction</string>
+
+    <string name="widget_allowance_label">Safe to spend</string>
+    <string name="widget_allowance_description">How much you can spend per day for the rest of this pay cycle, and whether you\'re on pace.</string>
+
+    <string name="widget_week_label">Last 7 days</string>
+    <string name="widget_week_description">Daily spending for the past week, compared with the week before, and where most of it went.</string>
+    <string name="widget_week_chart">Bar chart of spending for each of the last seven days</string>
+
+    <string name="widget_upcoming_label">Coming up</string>
+    <string name="widget_upcoming_description">Bills, IOUs and income due in the next 30 days, plus what you owe and are owed.</string>
+</resources>

@@ -1,99 +1,119 @@
 package com.example.financemanager.theme
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 // ============================================================================
-// PALETTE
+// PALETTE — "Titanium & Gold"
 //
-// A near-monochrome canvas does the structural work; colour is spent only on
-// money, state, and a single indigo accent. Every hue ships a light tone and a
-// dark tone rather than one washed-out middle value, so it stays vivid on white
-// and on near-black instead of going grey in one of them.
+// Charcoal and brushed metal with one warm gold accent: the look of a metal
+// card rather than a banking portal. Chosen by the user on 2026-10-10 from four
+// mocked-up directions, after the earlier indigo/teal set read as "made for a
+// kid" and a toned-down sapphire still read as flat and generic.
+//
+// Colour is spent on three things only: the gold accent, money state (sage in,
+// coral out), and the titanium hero card. Everything else is warm neutral —
+// greys with a slight yellow bias so they sit with the gold instead of against
+// it. Light tones clear 4.5:1 on a white card; dark tones clear it on #161618.
 //
 // Prefer the @Composable accessors at the bottom of this file in UI code — they
 // resolve to the right tone for the active theme.
 // ============================================================================
 
 // --- Accent --------------------------------------------------------------
-val AppPrimary = Color(0xFF4F46E5)          // indigo 600
-val AppPrimaryDark = Color(0xFF818CF8)      // indigo 400
-val AppPrimarySoftLight = Color(0xFFEEEFFE) // tinted chip/fill on white
-val AppPrimarySoftDark = Color(0xFF1C1B33)  // tinted chip/fill on near-black
+val AppPrimary = Color(0xFF94681F)          // antique gold, deep enough for white
+val AppPrimaryDark = Color(0xFFE3B566)      // champagne gold on charcoal
+val AppPrimarySoftLight = Color(0xFFF4ECDD) // tinted chip/fill on white
+val AppPrimarySoftDark = Color(0xFF2A2418)  // tinted chip/fill on charcoal
 // Label colour for anything filled with the accent. The accent runs light on a
 // dark canvas and deep on a light one, so this has to flip with the theme.
 val AppOnAccentLight = Color(0xFFFFFFFF)
-val AppOnAccentDark = Color(0xFF13122B)
+val AppOnAccentDark = Color(0xFF1A1305)
 
 // --- Money & state -------------------------------------------------------
-val AppSuccess = Color(0xFF059669)          // emerald 600
-val AppSuccessDark = Color(0xFF34D399)      // emerald 400
-val AppError = Color(0xFFE11D48)            // rose 600
-val AppErrorDark = Color(0xFFFB7185)        // rose 400
-val AppWarning = Color(0xFFD97706)          // amber 600
-val AppWarningDark = Color(0xFFFBBF24)      // amber 400
-val AppHighlight = Color(0xFFCA8A04)        // yellow 600
-val AppHighlightDark = Color(0xFFFACC15)    // yellow 400
-val AppAccent = Color(0xFF7C3AED)           // violet 600
-val AppAccentDark = Color(0xFFA78BFA)       // violet 400
-val AppTeal = Color(0xFF0D9488)             // teal 600
-val AppTealDark = Color(0xFF2DD4BF)         // teal 400
+// Money in and money out are the two colours read most often and at the smallest sizes, so they
+// carry full saturation: the earlier pastel pair (#7FD3A0 / #F08A7E on dark) washed out on a phone
+// screen in daylight. Light values hold >= 4.7:1 against white for text.
+val AppSuccess = Color(0xFF0F8043)          // emerald
+val AppSuccessDark = Color(0xFF36D07F)
+val AppError = Color(0xFFD93025)            // vermilion
+val AppErrorDark = Color(0xFFFF5B4F)
+val AppWarning = Color(0xFFA0601A)          // amber
+val AppWarningDark = Color(0xFFEBA75C)
+val AppHighlight = Color(0xFF8F6A1E)        // gold leaf
+val AppHighlightDark = Color(0xFFF0CF8A)
+val AppAccent = Color(0xFF7E5A9E)           // mauve
+val AppAccentDark = Color(0xFFC9A0DC)
+// The secondary hue, and the one with the most call sites after the accent.
+// A cool steel blue: the one cold note against all the warm metal, so it
+// separates without competing with the gold.
+val AppTeal = Color(0xFF4F6E8A)             // steel
+val AppTealDark = Color(0xFF9BB4C9)
 
 // Washes, for panels that need to signal state without shouting it.
-val AppSuccessSoftLight = Color(0xFFE7F6EF)
-val AppSuccessSoftDark = Color(0xFF0E2620)
-val AppErrorSoftLight = Color(0xFFFDECF0)
-val AppErrorSoftDark = Color(0xFF2A1218)
+val AppSuccessSoftLight = Color(0xFFDCF2E4)
+val AppSuccessSoftDark = Color(0xFF0E2A1A)
+val AppErrorSoftLight = Color(0xFFFCE4E1)
+val AppErrorSoftDark = Color(0xFF341512)
+
+// --- Hero card -----------------------------------------------------------
+// Brushed titanium, dark in BOTH themes — a metal card on a light table is
+// still a dark card. HeroCard draws its contents with the dark-theme tokens for
+// that reason. The light-theme ends are a touch deeper so the card holds its
+// weight against a pale canvas.
+val AppHeroStartLight = Color(0xFF1B1C1F)
+val AppHeroEndLight = Color(0xFF3A3C41)
+val AppHeroStartDark = Color(0xFF26272B)
+val AppHeroEndDark = Color(0xFF3A3C41)
 
 // --- Categorical chart palette -------------------------------------------
-// Eight hues spaced far enough apart to stay tellable apart in a donut slice,
-// starting from the accent so charts feel like part of the app rather than a
-// separate widget. Deep tones for white, bright tones for near-black.
+// Eight hues at matched weight, led by the gold so charts feel like part of the
+// app: gold, steel, mauve, sage, coral, sand, slate, teal. Deep tones for
+// white, light tones for charcoal.
 val ChartPaletteLight = listOf(
-    Color(0xFF4F46E5), // indigo
-    Color(0xFF0D9488), // teal
-    Color(0xFFE11D48), // rose
-    Color(0xFFD97706), // amber
-    Color(0xFFC026D3), // fuchsia
-    Color(0xFF0284C7), // sky
-    Color(0xFF059669), // emerald
-    Color(0xFF65A30D)  // lime
+    Color(0xFF94681F), // gold
+    Color(0xFF4F6E8A), // steel
+    Color(0xFF7E5A9E), // mauve
+    Color(0xFF27794C), // sage
+    Color(0xFFB9483A), // coral
+    Color(0xFF9C8457), // sand
+    Color(0xFF5F6672), // slate
+    Color(0xFF2F7F79)  // teal
 )
 val ChartPaletteDark = listOf(
-    Color(0xFF818CF8),
-    Color(0xFF2DD4BF),
-    Color(0xFFFB7185),
-    Color(0xFFFBBF24),
-    Color(0xFFE879F9),
-    Color(0xFF38BDF8),
-    Color(0xFF34D399),
-    Color(0xFFA3E635)
+    Color(0xFFE3B566),
+    Color(0xFF9BB4C9),
+    Color(0xFFC9A0DC),
+    Color(0xFF7FD3A0),
+    Color(0xFFF08A7E),
+    Color(0xFFD9C7A3),
+    Color(0xFF9AA1AC),
+    Color(0xFF7EC4BE)
 )
 
 // --- Neutrals ------------------------------------------------------------
-// Light: the canvas is pulled well clear of white so a white card is read as a
-// card. The earlier near-white canvas left only a 3% step against its cards,
-// which flattened every screen into one grey sheet; dark mode gets a ~7% step
-// between canvas and surface, and light mode needs the same room.
-val AppBackgroundLight = Color(0xFFEDF0F5)
+// Warm greys throughout. Light: the canvas is pulled well clear of white so a
+// white card reads as a card (a near-white canvas once left a 3% step and
+// flattened every screen); fills and chips sit a step *below* the canvas, the
+// way they sit a step above it in dark — recessed either way.
+val AppBackgroundLight = Color(0xFFF2F1EE)
 val AppSurfaceLight = Color(0xFFFFFFFF)
-// Fills and chips sit a step *below* the canvas here, the way they sit a step
-// above it in dark — recessed either way.
-val AppSurfaceVariantLight = Color(0xFFE2E7EF)
-val AppTextPrimaryLight = Color(0xFF0B0D12)
-val AppTextSecondaryLight = Color(0xFF4E5666)
-val AppTextTertiaryLight = Color(0xFF757D8C)
-val AppOutlineLight = Color(0xFFDCE1E9)
+val AppSurfaceVariantLight = Color(0xFFE8E6E1)
+val AppTextPrimaryLight = Color(0xFF121212)
+val AppTextSecondaryLight = Color(0xFF55534E)
+val AppTextTertiaryLight = Color(0xFF6F6C65)
+val AppOutlineLight = Color(0xFFE0DDD6)
 
-// Dark: true near-black canvas, not navy. Cards step up in lightness only.
-val AppBackgroundDark = Color(0xFF0A0A0C)
-val AppSurfaceDark = Color(0xFF141517)
-val AppSurfaceVariantDark = Color(0xFF1D1F22)
-val AppTextPrimaryDark = Color(0xFFF5F6F7)
-val AppTextSecondaryDark = Color(0xFFA2A8B2)
-val AppTextTertiaryDark = Color(0xFF767C86)
-val AppOutlineDark = Color(0xFF26282C)
+// Dark: charcoal, not navy. Cards step up in lightness only.
+val AppBackgroundDark = Color(0xFF0C0C0E)
+val AppSurfaceDark = Color(0xFF161618)
+val AppSurfaceVariantDark = Color(0xFF202023)
+val AppTextPrimaryDark = Color(0xFFF4F2EE)
+val AppTextSecondaryDark = Color(0xFFABA8A1)
+val AppTextTertiaryDark = Color(0xFF8E8B84)
+val AppOutlineDark = Color(0xFF26262A)
 
 // --- Shape & rhythm ------------------------------------------------------
 // Fewer, larger radii and a wider spacing scale read as calmer than many
@@ -127,11 +147,11 @@ val iOSTertiaryBackgroundDark = AppSurfaceVariantDark
 val iOSTextPrimaryLight = AppTextPrimaryLight
 val iOSTextSecondaryLight = AppTextSecondaryLight
 val iOSTextTertiaryLight = AppTextTertiaryLight
-val iOSTextQuaternaryLight = Color(0xFFAEB4BF)
+val iOSTextQuaternaryLight = Color(0xFFB3B0A8)
 val iOSTextPrimaryDark = AppTextPrimaryDark
 val iOSTextSecondaryDark = AppTextSecondaryDark
 val iOSTextTertiaryDark = AppTextTertiaryDark
-val iOSTextQuaternaryDark = Color(0xFF5A5F68)
+val iOSTextQuaternaryDark = Color(0xFF5E5C57)
 val iOSSeparatorLight = AppOutlineLight
 val iOSSeparatorDark = AppOutlineDark
 val iOSBorderLight = AppOutlineLight
@@ -176,10 +196,85 @@ val TextPrimary: Color @Composable get() = if (LocalThemeIsDark.current) AppText
 val TextSecondary: Color @Composable get() = if (LocalThemeIsDark.current) AppTextSecondaryDark else AppTextSecondaryLight
 val TextMuted: Color @Composable get() = if (LocalThemeIsDark.current) AppTextTertiaryDark else AppTextTertiaryLight
 
-// Gradients are deliberately flat: the accent belongs on the numbers, not on
-// large filled areas. Kept as aliases so older call sites still compile.
-val HeroGradientStart: Color @Composable get() = DarkSurface
-val HeroGradientEnd: Color @Composable get() = DarkSurface
+// --- User-chosen colours (categories, goals) -------------------------------
+// Category and goal colours are stored as hex strings — seeded from Material's
+// bright 500 swatches, picked by the user, or arriving via sync — so they can't
+// be fixed in the palette above. Instead they're re-toned at draw time: the hue
+// survives, so categories stay tellable apart, but lightness is pinned and
+// chroma capped to sit alongside the rest of the palette. That covers rows that
+// already exist without a migration. Unparseable input falls back to a neutral
+// rather than throwing, which parseColor alone would do mid-composition.
+
+/** The mid tone of a stored colour: icons, dots, bars, filled selections. */
+@Composable
+fun paletteTone(hex: String?): Color {
+    val dark = LocalThemeIsDark.current
+    return remember(hex, dark) { retone(hex, dark, wash = false) }
+}
+
+/** A faint tint of a stored colour for containers that carry [TextPrimary]. */
+@Composable
+fun paletteWash(hex: String?): Color {
+    val dark = LocalThemeIsDark.current
+    return remember(hex, dark) { retone(hex, dark, wash = true) }
+}
+
+private fun retone(hex: String?, dark: Boolean, wash: Boolean): Color {
+    val argb = try {
+        hex?.let { android.graphics.Color.parseColor(it) }
+    } catch (e: IllegalArgumentException) {
+        null
+    }
+    val (_, c, h) = if (argb == null) Triple(0.0, 0.0, 0.0) else srgbToOklch(argb)
+    val (targetL, maxC) = when {
+        wash && dark -> 0.26 to 0.04
+        wash -> 0.94 to 0.035
+        dark -> 0.76 to 0.10
+        else -> 0.53 to 0.11
+    }
+    // Greys keep their low chroma; only loud colours get pulled in.
+    return oklchToColor(targetL, minOf(c, maxC), h)
+}
+
+private fun srgbToOklch(argb: Int): Triple<Double, Double, Double> {
+    fun lin(v: Int): Double {
+        val x = v / 255.0
+        return if (x <= 0.04045) x / 12.92 else Math.pow((x + 0.055) / 1.055, 2.4)
+    }
+    val r = lin((argb shr 16) and 0xFF)
+    val g = lin((argb shr 8) and 0xFF)
+    val b = lin(argb and 0xFF)
+    val l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+    val m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+    val s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+    val okL = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
+    val okA = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+    val okB = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+    return Triple(okL, Math.hypot(okA, okB), Math.atan2(okB, okA))
+}
+
+private fun oklchToColor(okL: Double, chroma: Double, hueRad: Double): Color {
+    val a = chroma * Math.cos(hueRad)
+    val b = chroma * Math.sin(hueRad)
+    val l = (okL + 0.3963377774 * a + 0.2158037573 * b).let { it * it * it }
+    val m = (okL - 0.1055613458 * a - 0.0638541728 * b).let { it * it * it }
+    val s = (okL - 0.0894841775 * a - 1.2914855480 * b).let { it * it * it }
+    fun enc(x: Double): Float {
+        val v = x.coerceIn(0.0, 1.0)
+        return (if (v <= 0.0031308) 12.92 * v else 1.055 * Math.pow(v, 1 / 2.4) - 0.055).toFloat()
+    }
+    return Color(
+        red = enc(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s),
+        green = enc(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s),
+        blue = enc(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)
+    )
+}
+
+// The hero gradient is real (see HeroCard). The rest stay flat: one metal card
+// per screen is a feature, five of them is a toy. Kept as aliases so older call
+// sites still compile.
+val HeroGradientStart: Color @Composable get() = if (LocalThemeIsDark.current) AppHeroStartDark else AppHeroStartLight
+val HeroGradientEnd: Color @Composable get() = if (LocalThemeIsDark.current) AppHeroEndDark else AppHeroEndLight
 val BankCardStart: Color @Composable get() = DarkSurface
 val BankCardEnd: Color @Composable get() = DarkSurface
 val CashCardStart: Color @Composable get() = DarkSurface

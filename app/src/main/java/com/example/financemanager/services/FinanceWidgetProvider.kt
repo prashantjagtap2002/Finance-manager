@@ -1,158 +1,119 @@
 package com.example.financemanager.services
 
-import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
-import android.appwidget.AppWidgetProvider
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
+import android.os.Build
+import android.util.SizeF
+import android.view.View
 import android.widget.RemoteViews
-import com.example.financemanager.MainActivity
+import androidx.core.content.ContextCompat
 import com.example.financemanager.R
-import com.example.financemanager.core.FinancePreferences
-import com.example.financemanager.data.*
+import com.example.financemanager.services.widgets.CycleSnapshot
+import com.example.financemanager.services.widgets.FinanceAppWidget
+import com.example.financemanager.services.widgets.loadCycleSnapshot
 import com.example.financemanager.ui.components.moneyString
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-import java.util.Calendar
 
-/** The two numbers the widget shows, read in one pass over the database. */
-private data class WidgetSnapshot(
-    val spentToday: Double,
-    val tightestEnvelopeName: String?,
-    val tightestEnvelopeRemaining: Double
-)
-
-class FinanceWidgetProvider : AppWidgetProvider() {
+/** "Spending today": today's total, the cycle against its budget, and the tightest envelopes. */
+class FinanceWidgetProvider : FinanceAppWidget() {
 
     companion object {
-        /** Broadcast this (explicitly) to refresh the widget outside the system's own schedule. */
-        const val ACTION_UPDATE_WIDGET = "com.example.financemanager.UPDATE_WIDGET"
+        /** Kept for callers that predate the other widgets; refreshes all of them. */
+        fun refresh(context: Context) = refreshAll(context)
 
-        // Tied to the process rather than to a receiver instance: Android creates a new provider
-        // object per broadcast and discards it as soon as onReceive returns.
-        private val widgetScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        /**
+         * Height each envelope-row count needs, in dp, measured off widget_spending.xml: 90 for
+         * the header and cycle line, then 36 per row, plus a little slack for font scaling. The
+         * old breakpoint showed three rows from 190dp, which cut the third in half on a 4x2 Pixel.
+         */
+        private val rowBreakpoints = listOf(0 to 95f, 1 to 135f, 2 to 172f, 3 to 210f)
     }
 
-    override fun onUpdate(
-        context: Context,
-        appWidgetManager: AppWidgetManager,
-        appWidgetIds: IntArray
-    ) {
-        // A widget update can start the process on its own, without MainActivity ever running,
-        // so the currency symbol and privacy flag have to be loaded here too.
-        FinancePreferences.init(context)
+    override suspend fun render(context: Context, manager: AppWidgetManager, widgetId: Int): RemoteViews {
+        // A failed read shows dashes rather than leaving the last values up: a stale number
+        // presented as current is worse than none on a spending widget.
+        val snapshot = runCatching { loadCycleSnapshot(context) }.getOrNull()
+        val small = bind(context, R.layout.widget_small, snapshot, envelopeRows = -1)
 
-        // goAsync keeps the process alive until the database read finishes. Without it the work
-        // was racing a teardown that begins the moment onReceive returns.
-        val pendingResult = goAsync()
-        widgetScope.launch {
-            val snapshot = runCatching { loadSnapshot(context) }.getOrNull()
-            try {
-                appWidgetIds.forEach { render(context, appWidgetManager, it, snapshot) }
-            } finally {
-                pendingResult.finish()
+        // Android 12+: hand the launcher every size and let it pick as the user resizes, with no
+        // round trip through this process. Breakpoints are in dp.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val sizes = mutableMapOf(SizeF(110f, 40f) to small)
+            rowBreakpoints.forEach { (rows, height) ->
+                sizes[SizeF(200f, height)] = bind(context, R.layout.widget_spending, snapshot, rows)
+            }
+            return RemoteViews(sizes)
+        }
+        val options = manager.getAppWidgetOptions(widgetId)
+        val width = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, 250)
+        val height = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, 110)
+        if (width < 200 || height < rowBreakpoints.first().second) return small
+        val rows = rowBreakpoints.last { height >= it.second }.first
+        return bind(context, R.layout.widget_spending, snapshot, rows)
+    }
+
+    /** [envelopeRows] of -1 means the 2x1 strip, which has no cycle line at all. */
+    private fun bind(context: Context, layout: Int, snapshot: CycleSnapshot?, envelopeRows: Int): RemoteViews {
+        val views = RemoteViews(context.packageName, layout)
+        views.setOnClickPendingIntent(android.R.id.background, openAppIntent(context))
+        views.setOnClickPendingIntent(R.id.w_add, openAppIntent(context, quickEntry = true))
+
+        // Amounts go through moneyString, so privacy mode masks them: the home screen is the
+        // easiest surface to shoulder-surf. Whole rupees: paise only add width here.
+        if (snapshot == null) {
+            views.setTextViewText(R.id.w_today, "—")
+            if (envelopeRows >= 0) views.setTextViewText(R.id.w_cycle, "Tap to open")
+            return views
+        }
+        views.setTextViewText(R.id.w_today, moneyString(snapshot.spentToday, decimals = 0))
+        if (envelopeRows < 0) return views
+
+        views.setTextViewText(
+            R.id.w_cycle,
+            if (snapshot.cycleBudget > 0) {
+                "${moneyString(snapshot.spentThisCycle, decimals = 0)} of ${moneyString(snapshot.cycleBudget, decimals = 0)} this cycle"
+            } else {
+                "${moneyString(snapshot.spentThisCycle, decimals = 0)} spent this cycle"
+            }
+        )
+
+        val rows = listOf(
+            intArrayOf(R.id.w_env1, R.id.w_env1_name, R.id.w_env1_left, R.id.w_env1_bar),
+            intArrayOf(R.id.w_env2, R.id.w_env2_name, R.id.w_env2_left, R.id.w_env2_bar),
+            intArrayOf(R.id.w_env3, R.id.w_env3_name, R.id.w_env3_left, R.id.w_env3_bar)
+        )
+        rows.forEachIndexed { index, (rowId, nameId, leftId, barId) ->
+            val envelope = snapshot.envelopes.getOrNull(index)
+            if (index >= envelopeRows || envelope == null) {
+                views.setViewVisibility(rowId, View.GONE)
+                return@forEachIndexed
+            }
+            views.setViewVisibility(rowId, View.VISIBLE)
+            views.setTextViewText(nameId, envelope.name)
+            val over = envelope.remaining < 0
+            views.setTextViewText(
+                leftId,
+                if (over) "${moneyString(-envelope.remaining, decimals = 0)} over"
+                else "${moneyString(envelope.remaining, decimals = 0)} left"
+            )
+            views.setTextColor(
+                leftId,
+                ContextCompat.getColor(context, if (over) R.color.widget_warn else R.color.widget_muted)
+            )
+            views.setProgressBar(barId, 1000, (envelope.fraction.coerceIn(0.0, 1.0) * 1000).toInt(), false)
+            // Three states rather than one warning colour from 90%: when every row was "warn",
+            // none of them stood out. Gold is fine, amber is close, coral is over.
+            // Tinting a widget's progress bar needs Android 12; before that it stays gold.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val tint = when {
+                    envelope.fraction >= 1.0 -> R.color.widget_warn
+                    envelope.fraction >= 0.85 -> R.color.widget_caution
+                    else -> R.color.widget_accent
+                }
+                views.setColorStateList(barId, "setProgressTintList", tint)
             }
         }
-    }
-
-    override fun onReceive(context: Context, intent: Intent) {
-        super.onReceive(context, intent)
-        if (intent.action == ACTION_UPDATE_WIDGET) {
-            val appWidgetManager = AppWidgetManager.getInstance(context)
-            val ids = appWidgetManager.getAppWidgetIds(ComponentName(context, FinanceWidgetProvider::class.java))
-            onUpdate(context, appWidgetManager, ids)
-        }
-    }
-
-    /**
-     * Today's spending and the envelope with the least left in it.
-     *
-     * The envelope used to be hardcoded as category id 1, labelled "Food" — an id that is only
-     * "Food & Dining" on a database that still has its seed data, and that points at whatever
-     * inherited the id after a category was deleted or an account merged. The tightest envelope is
-     * both correct by construction and the more useful number to see on a home screen.
-     */
-    private suspend fun loadSnapshot(context: Context): WidgetSnapshot {
-        val dao = FinanceDatabase.getDatabase(context).dao()
-
-        val startOfDay = Calendar.getInstance().apply {
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val dayStart = startOfDay.timeInMillis
-        startOfDay.add(Calendar.DAY_OF_YEAR, 1)
-        val dayEnd = startOfDay.timeInMillis
-
-        val monthStart = Calendar.getInstance().apply {
-            set(Calendar.DAY_OF_MONTH, 1)
-            set(Calendar.HOUR_OF_DAY, 0)
-            set(Calendar.MINUTE, 0)
-            set(Calendar.SECOND, 0)
-            set(Calendar.MILLISECOND, 0)
-        }.timeInMillis
-
-        val spentToday = dao.getTransactionsBetweenDates(dayStart, dayEnd)
-            .filter { it.type == TransactionType.EXPENSE }
-            .sumOf { it.amount }
-
-        val monthExpenses = dao.getTransactionsBetweenDates(monthStart, System.currentTimeMillis())
-            .filter { it.type == TransactionType.EXPENSE }
-        val spentByCategory = monthExpenses.groupBy { it.categoryId }.mapValues { (_, txs) -> txs.sumOf { it.amount } }
-
-        val tightest = dao.getCategoriesList()
-            .filter { it.budgetLimit > 0 }
-            .minByOrNull { it.budgetLimit - (spentByCategory[it.id] ?: 0.0) }
-
-        return WidgetSnapshot(
-            spentToday = spentToday,
-            tightestEnvelopeName = tightest?.name,
-            tightestEnvelopeRemaining = tightest
-                ?.let { maxOf(0.0, it.budgetLimit - (spentByCategory[it.id] ?: 0.0)) }
-                ?: 0.0
-        )
-    }
-
-    private fun render(
-        context: Context,
-        appWidgetManager: AppWidgetManager,
-        appWidgetId: Int,
-        snapshot: WidgetSnapshot?
-    ) {
-        val views = RemoteViews(context.packageName, R.layout.widget_layout)
-
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-            putExtra("open_quick_entry", true)
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            context,
-            0,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        views.setOnClickPendingIntent(R.id.btn_quick_add, pendingIntent)
-
-        // Masked under privacy mode: the home screen is the easiest surface to shoulder-surf.
-        if (snapshot != null) {
-            views.setTextViewText(R.id.txt_spent_today, "Spent Today: ${moneyString(snapshot.spentToday)}")
-            views.setTextViewText(
-                R.id.txt_budget_left,
-                snapshot.tightestEnvelopeName
-                    ?.let { "$it left: ${moneyString(snapshot.tightestEnvelopeRemaining)}" }
-                    ?: "No envelope budgets set"
-            )
-        } else {
-            // The database read failed. Leaving the last values on screen would present a stale
-            // number as a current one, which on a spending widget is worse than showing nothing.
-            views.setTextViewText(R.id.txt_spent_today, "Spent Today: --")
-            views.setTextViewText(R.id.txt_budget_left, "Tap to open Finance Manager")
-        }
-
-        appWidgetManager.updateAppWidget(appWidgetId, views)
+        val showEmpty = snapshot.envelopes.isEmpty() && envelopeRows > 0
+        views.setViewVisibility(R.id.w_empty, if (showEmpty) View.VISIBLE else View.GONE)
+        return views
     }
 }

@@ -34,6 +34,32 @@ object Money {
         return BigDecimal.valueOf(amount).setScale(2, RoundingMode.HALF_UP).toDouble()
     }
 
+    /** Larger than any amount a person types on purpose; anything above is a slip or a paste. */
+    const val MAX_INPUT_AMOUNT = 100_000_000_000.0
+
+    /**
+     * What the user typed as an amount, as money: positive, finite, at most [MAX_INPUT_AMOUNT],
+     * rounded to the minor unit — or null when it isn't one.
+     *
+     * `String.toDoubleOrNull` alone accepts "NaN" and "Infinity" (both pasteable), and a NaN slips
+     * past every `amount <= 0` check and turns the account balance into NaN for good. Commas are
+     * read the way they're written: "1,234" and "1,23,456" are grouping, but a single comma with
+     * one or two digits after it ("12,50") is a decimal comma, since that keyboard layout exists.
+     */
+    fun parseInput(text: String): Double? {
+        var s = text.trim().replace(" ", "").replace(" ", "")
+        if (s.isEmpty() || s.any { !(it.isDigit() || it == '.' || it == ',') }) return null
+        s = when {
+            ',' !in s -> s
+            '.' in s -> s.replace(",", "")
+            s.count { it == ',' } == 1 && s.substringAfter(',').length in 1..2 -> s.replace(',', '.')
+            else -> s.replace(",", "")
+        }
+        val value = s.toDoubleOrNull() ?: return null
+        if (!value.isFinite() || value > MAX_INPUT_AMOUNT) return null
+        return roundToMinorUnit(value).takeIf { it > 0.0 }
+    }
+
     /** Whether two amounts are the same money, ignoring representation noise. */
     fun sameAmount(a: Double, b: Double): Boolean = kotlin.math.abs(a - b) <= EPSILON
 

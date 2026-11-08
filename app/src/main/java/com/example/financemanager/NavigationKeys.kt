@@ -18,3 +18,7 @@ import kotlinx.serialization.Serializable
 @Serializable data object NetWorth : NavKey
 @Serializable data object Search : NavKey
 @Serializable data object SmsTransactions : NavKey
+@Serializable data object SmsRules : NavKey
+@Serializable data object SmsReview : NavKey
+@Serializable data object SpendingCalendar : NavKey
+@Serializable data object Duplicates : NavKey

@@ -177,7 +177,14 @@ data class Debt(
     val interestRate: Double? = null,
     val minimumPayment: Double? = null,
     /** When this row last changed; see [Account.updatedAt]. */
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    /**
+     * The ledger row that moved the account when this IOU was opened from Quick Transaction, or 0
+     * for one that moved no money (added on the Debt screen, or from before the link existed).
+     * Deleting an unpaid IOU revokes this row, so an IOU made by mistake gives its money back.
+     * Local only: the cloud schema has no such column, and a pulled row keeps the local value.
+     */
+    val ledgerTransactionId: Long = 0
 )
 
 @Entity(
@@ -307,3 +314,20 @@ object SyncTables {
     const val DEBTS = "debts"
     const val SMS_TRANSACTIONS = "sms_transactions"
 }
+
+/**
+ * A photo of the paper receipt behind a transaction. The image itself lives in the app's private
+ * files directory under [fileName]; this row only says which transaction it belongs to.
+ *
+ * Local only — receipts are not part of cloud sync or the JSON backup, and a receipt whose
+ * transaction no longer exists is cleaned up by [com.example.financemanager.core.ReceiptStore].
+ * Deleting the transaction does not remove it straight away, so the delete's Undo can bring the
+ * photo back along with the row.
+ */
+@Entity(tableName = "receipts", indices = [Index(value = ["transactionId"])])
+data class Receipt(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val transactionId: Long,
+    val fileName: String,
+    val createdAt: Long = System.currentTimeMillis()
+)

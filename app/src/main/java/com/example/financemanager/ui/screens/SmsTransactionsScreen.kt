@@ -1,5 +1,6 @@
 package com.example.financemanager.ui.screens
 
+import com.example.financemanager.ui.components.formatDate
 import android.Manifest
 import android.content.pm.PackageManager
 import android.widget.Toast
@@ -29,6 +30,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
@@ -52,7 +54,10 @@ import com.example.financemanager.ui.components.EmptyState
 import com.example.financemanager.ui.components.IosButton
 import com.example.financemanager.ui.components.IosButtonVariant
 import com.example.financemanager.ui.components.IosCard
+import com.example.financemanager.ui.components.IosTopAppBar
 import com.example.financemanager.ui.components.moneyString
+import com.example.financemanager.ui.components.rememberLargeTitleBehavior
+import com.example.financemanager.ui.components.tabBarAwareInsets
 import com.example.financemanager.ui.viewmodel.FinanceViewModel
 import com.example.financemanager.domain.SmsAmountFormatter
 import kotlinx.coroutines.launch
@@ -74,7 +79,8 @@ private enum class SmsFilter(
 fun SmsTransactionsScreen(
     viewModel: FinanceViewModel,
     showBackButton: Boolean = true,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onNavigateToReview: () -> Unit = {}
 ) {
     val allTxs by viewModel.smsTransactions.collectAsStateWithLifecycle()
     val links by viewModel.smsLinks.collectAsStateWithLifecycle()
@@ -170,29 +176,17 @@ fun SmsTransactionsScreen(
         SmsFilter.APPROVED -> approvedTxs
     }
 
+    val titleBehavior = rememberLargeTitleBehavior()
     Scaffold(
+        modifier = Modifier.nestedScroll(titleBehavior.nestedScrollConnection),
+        // The tab bar floats over this screen; snackbars sit above it.
+        contentWindowInsets = tabBarAwareInsets(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("SMS Transactions", style = Typography.titleLarge.copy(color = TextPrimary))
-                        if (pendingTxs.isNotEmpty()) {
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Box(
-                                modifier = Modifier.size(22.dp).clip(CircleShape).background(AlertRed),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    pendingTxs.size.toString(),
-                                    color = Color.White,
-                                    fontSize = if (pendingTxs.size > 99) 8.sp else 11.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        }
-                    }
-                },
+            // The pending count lives on the "Review N" action, so the title stays plain text.
+            IosTopAppBar(
+                title = "SMS Transactions",
+                scrollBehavior = titleBehavior,
                 navigationIcon = {
                     if (showBackButton) {
                         IconButton(onClick = onNavigateBack) {
@@ -201,11 +195,17 @@ fun SmsTransactionsScreen(
                     }
                 },
                 actions = {
+                    if (pendingTxs.isNotEmpty()) {
+                        TextButton(onClick = onNavigateToReview) {
+                            Icon(Icons.Default.Style, contentDescription = null, tint = AccentGreen, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Review ${pendingTxs.size}", color = AccentGreen)
+                        }
+                    }
                     IconButton(onClick = { importLauncher.launch(arrayOf("application/json", "text/xml", "application/xml")) }) {
                         Icon(Icons.Default.FileUpload, contentDescription = "Import SMS backup", tint = SecondaryTeal)
                     }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = DeepBackground)
+                }
             )
         },
         containerColor = DeepBackground
@@ -224,8 +224,11 @@ fun SmsTransactionsScreen(
             LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(paddingValues)
+                    // Only the top inset is a hard edge; the bottom one goes into contentPadding so
+                    // the list runs on beneath the translucent tab bar.
+                    .padding(top = paddingValues.calculateTopPadding())
                     .padding(horizontal = 16.dp),
+                contentPadding = PaddingValues(bottom = paddingValues.calculateBottomPadding()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 if (!smsPermissionGranted) {
@@ -1918,7 +1921,5 @@ private fun getDefaultAccountId(accounts: List<Account>, accountName: String): L
     }?.id ?: accounts.firstOrNull()?.id ?: 1L
 }
 
-private fun formatSmsTimestamp(timestamp: Long): String {
-    val formatter = SimpleDateFormat("dd MMM yyyy, hh:mm a", Locale.getDefault())
-    return formatter.format(Date(timestamp))
-}
+private fun formatSmsTimestamp(timestamp: Long): String =
+    formatDate(timestamp, "dd MMM yyyy, hh:mm a")
