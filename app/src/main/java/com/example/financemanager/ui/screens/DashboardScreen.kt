@@ -1380,7 +1380,7 @@ fun TransactionItem(
     }
 
     val prefix = when (transaction.type) {
-        TransactionType.EXPENSE -> "-"
+        TransactionType.EXPENSE -> "−"
         TransactionType.INCOME -> "+"
         TransactionType.TRANSFER -> ""
     }

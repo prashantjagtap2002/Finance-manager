@@ -57,15 +57,14 @@ fun BudgetScreen(
     showBackButton: Boolean = true
 ) {
     val categories by viewModel.categories.collectAsStateWithLifecycle()
-    val transactions by viewModel.transactions.collectAsStateWithLifecycle()
     val monthlyCategorySpend by viewModel.monthlyCategorySpend.collectAsStateWithLifecycle(initialValue = emptyMap())
     val isPrivacy by viewModel.isPrivacyMode.collectAsStateWithLifecycle()
 
-    // Zero-Based Budget Math
-    val totalIncome = transactions
-        .filter { it.type == TransactionType.INCOME }
-        .sumOf { it.amount }
-        
+    // Zero-Based Budget Math. Income is this pay cycle's, in the home currency — the same window
+    // the envelopes' spending is measured over. It used to add up every income row ever logged,
+    // so "Monthly Income" grew forever and "left to assign" was out by every past month's pay.
+    val totalIncome by viewModel.monthlyIncomeTotal.collectAsStateWithLifecycle()
+
     val totalAllocated = categories.sumOf { it.budgetLimit }
     val leftToAssign = totalIncome - totalAllocated
 

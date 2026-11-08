@@ -302,6 +302,34 @@ class FinanceRepository(
         updated
     }
 
+    /**
+     * Rewrites balance adjustments stored with a negative amount — from before
+     * [postBalanceAdjustment] took a signed delta — into the shape it writes today: a positive
+     * amount landing on the destination side with no source account.
+     *
+     * Such a row (source = A, no destination, amount −X) already credits A by X, because a
+     * source-side TRANSFER subtracts its amount; the rewrite (source 0, destination A, amount X)
+     * credits A by exactly the same X as an incoming transfer. No balance moves — the point is
+     * that the row stops displaying as a negative transfer out. Returns how many were rewritten.
+     */
+    suspend fun normalizeNegativeAdjustments(): Int = dao.atomically {
+        var fixed = 0
+        dao.getTransactionsList()
+            .filter { it.type == TransactionType.TRANSFER && it.amount < 0.0 && it.destinationAccountId == null && it.sourceAccountId > 0L }
+            .forEach { row ->
+                dao.updateTransaction(
+                    row.copy(
+                        amount = -row.amount,
+                        sourceAccountId = 0L,
+                        destinationAccountId = row.sourceAccountId,
+                        updatedAt = now()
+                    )
+                )
+                fixed++
+            }
+        fixed
+    }
+
     suspend fun deleteTransaction(transaction: Transaction) = dao.atomically {
         AccountLedger.revoke(dao, transaction)
         tombstone(SyncTables.TRANSACTIONS, transaction.id)

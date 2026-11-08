@@ -82,14 +82,20 @@ fun SmsReviewScreen(
     var categoryId by remember { mutableLongStateOf(0L) }
     var accountId by remember { mutableLongStateOf(0L) }
 
-    // Re-prefill whenever a new card comes to the top.
-    LaunchedEffect(current?.id, accounts, categories) {
+    // Re-prefill whenever a new card comes to the top — or the learned rules finish loading,
+    // which on a cold start can land after the first card is already showing.
+    val merchantRules by viewModel.merchantRules.collectAsStateWithLifecycle()
+    LaunchedEffect(current?.id, accounts, categories, merchantRules.isEmpty()) {
         val tx = current ?: return@LaunchedEffect
         val learned = viewModel.learnedRuleFor(tx.counterparty)
-        categoryId = learned?.categoryId?.takeIf { id -> categories.any { it.id == id } }
-            ?: categories.firstOrNull()?.id ?: 0L
-        accountId = learned?.accountId?.takeIf { id -> accounts.any { it.id == id } }
-            ?: accounts.find { tx.accountName.isNotBlank() && it.name.contains(tx.accountName, ignoreCase = true) }?.id
+        // No learned envelope means no guess: pre-selecting the first one filed a ₹21 tea
+        // payment under "Investments" on a quick "Log it". Unset, approve() asks for a pick.
+        categoryId = learned?.categoryId?.takeIf { id -> categories.any { it.id == id } } ?: 0L
+        // The account the alert itself names comes first. A learned rule only remembers where this
+        // merchant was paid *from last time*: a payee once paid from TJSB, paid today from Kotak,
+        // pre-selected TJSB and "Log it" debited the wrong bank.
+        accountId = accounts.find { tx.accountName.isNotBlank() && it.name.contains(tx.accountName, ignoreCase = true) }?.id
+            ?: learned?.accountId?.takeIf { id -> accounts.any { it.id == id } }
             ?: accounts.firstOrNull()?.id ?: 0L
     }
 

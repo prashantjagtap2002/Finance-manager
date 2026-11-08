@@ -363,7 +363,12 @@ fun SmsTransactionsScreen(
                                 val learnedCategory = learned?.categoryId?.takeIf { id ->
                                     categories.any { it.id == id }
                                 }
-                                selectedAccountId = learnedAccount ?: getDefaultAccountId(accounts, tx.accountName)
+                                // The bank the alert names beats the learned account: the rule
+                                // only knows where this merchant was paid from last time.
+                                val namedAccount = accounts.find {
+                                    tx.accountName.isNotBlank() && it.name.contains(tx.accountName, ignoreCase = true)
+                                }?.id
+                                selectedAccountId = namedAccount ?: learnedAccount ?: getDefaultAccountId(accounts, tx.accountName)
                                 selectedCategoryId = learnedCategory ?: categories.firstOrNull()?.id ?: 0L
                                 approveNote = ""
                                 showApproveDialog = tx
@@ -704,7 +709,9 @@ private fun SmsTransactionCard(
                                 style = Typography.labelMedium.copy(color = WarningAmber)
                             )
                         }
-                        if (tx.balance.isNotEmpty()) {
+                        // The bank parsers prefix "Rs." whether or not a balance was found, so a
+                        // Kotak UPI alert (which carries none) read "Bal: Rs." — show it only with digits.
+                        if (tx.balance.any { it.isDigit() }) {
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 "Bal: ${tx.balance}",

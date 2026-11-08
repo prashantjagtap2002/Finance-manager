@@ -431,7 +431,7 @@ fun LogItem(
         TransactionType.TRANSFER -> SecondaryTeal
     }
     val sign = when (transaction.type) {
-        TransactionType.EXPENSE -> "-"
+        TransactionType.EXPENSE -> "−"
         TransactionType.INCOME -> "+"
         TransactionType.TRANSFER -> ""
     }

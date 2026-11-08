@@ -42,4 +42,25 @@ object MerchantKey {
 
         return words.joinToString(" ").take(48)
     }
+
+    /** Shorter than this, a prefix says too little: "jio" would claim "jiomart" and "jio fiber". */
+    private const val MIN_PREFIX_MATCH = 8
+
+    /**
+     * The stored rule key that [key] should use: [key] itself when a rule has exactly it, otherwise
+     * the longest stored key that one of the two truncates — banks cut payee names at different
+     * lengths, so one person arrives as "RAMESHKUMAR SH" in one alert and "RAMESHKUMAR SHRIGHUR"
+     * in the next. Without this, reading the full name lost every category learned under the
+     * short one. Null when nothing matches.
+     */
+    fun bestMatch(key: String, ruleKeys: Collection<String>): String? {
+        if (key.isEmpty()) return null
+        if (key in ruleKeys) return key
+        return ruleKeys
+            .filter { stored ->
+                minOf(stored.length, key.length) >= MIN_PREFIX_MATCH &&
+                    (key.startsWith(stored) || stored.startsWith(key))
+            }
+            .maxByOrNull { it.length }
+    }
 }

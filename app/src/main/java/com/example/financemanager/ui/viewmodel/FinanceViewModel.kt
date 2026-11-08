@@ -273,7 +273,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
 
         accounts = repository.accounts.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         categories = repository.categories.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-        transactions = repository.transactions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        // Eagerly: existingMatchFor and other one-shot reads take `transactions.value` from screens
+        // that never collect it (the SMS review screen among them), and a lazily-shared flow there
+        // reads emptyList(), so a duplicate alert was never flagged. Every main screen needs this
+        // list anyway; keeping the one shared subscription warm costs nothing extra.
+        transactions = repository.transactions.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
         recurringTransactions = repository.recurringTransactions.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         savingsGoals = repository.savingsGoals.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         debts = repository.debts.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -292,9 +296,12 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         }.flowOn(Dispatchers.Default)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+        // Eagerly, not WhileSubscribed: the approval screens read this through learnedRuleFor's
+        // `.value` and never collect it, so a lazily-shared flow sat at emptyMap() and no learned
+        // envelope was ever pre-filled. The table is one small row per merchant.
         merchantRules = repository.merchantRules
             .map { rules -> rules.associateBy { it.merchantKey } }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
+            .stateIn(viewModelScope, SharingStarted.Eagerly, emptyMap())
 
         smsTransactions = repository.smsTransactions
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -670,7 +677,7 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         // Once: fill in payees the old Kotak pattern dropped (titles that read just "Kotak").
         if (prefs.getInt(SMS_PAYEE_BACKFILL_KEY, 0) < SMS_PAYEE_BACKFILL) {
             viewModelScope.launch(Dispatchers.IO) {
-                val fixed = runCatching { repository.backfillSmsPayees() }
+                val fixed = runCatching { repository.backfillSmsPayees() + repository.normalizeNegativeAdjustments() }
                     .onFailure { android.util.Log.e("FinanceViewModel", "Payee backfill failed", it) }
                     .getOrNull() ?: return@launch
                 prefs.edit().putInt(SMS_PAYEE_BACKFILL_KEY, SMS_PAYEE_BACKFILL).apply()
@@ -684,8 +691,12 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
         /** Bump when [com.example.financemanager.domain.SmsParser] starts rejecting more. */
         const val SMS_FILTER_REVISION = 2
         const val SMS_PAYEE_BACKFILL_KEY = "sms_payee_backfill"
-        /** Bump when a parser fix recovers counterparties that existing alerts are missing. */
-        const val SMS_PAYEE_BACKFILL = 1
+        /**
+         * Bump when a one-time data repair is added: a parser fix that recovers counterparties
+         * existing alerts are missing (1), legacy negative balance adjustments (2). Every repair
+         * in that pass is idempotent, so re-running the earlier ones is harmless.
+         */
+        const val SMS_PAYEE_BACKFILL = 2
     }
 
     // --- Pro Tier / Monetization Simulation ---
@@ -2457,8 +2468,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
      * Used to pre-fill the approval sheet so repeat merchants need no input at all.
      */
     fun learnedRuleFor(merchant: String): MerchantRule? {
-        val key = MerchantKey.normalize(merchant)
-        return if (key.isEmpty()) null else merchantRules.value[key]
+        val rules = merchantRules.value
+        val key = MerchantKey.bestMatch(MerchantKey.normalize(merchant), rules.keys) ?: return null
+        return rules[key]
     }
 
     fun forgetMerchantRule(merchantKey: String) {
@@ -3030,6 +3042,9 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                     return created
                 }
 
+                // Read once: each imported alert looks its payee up against these.
+                val importRuleKeys = repository.getMerchantRulesOnce().map { it.merchantKey }.toSet()
+
                 context.contentResolver.openInputStream(uri)?.use { inputStream ->
                     val parser = android.util.Xml.newPullParser()
                     parser.setInput(inputStream, null)
@@ -3048,8 +3063,11 @@ class FinanceViewModel(application: Application) : AndroidViewModel(application)
                                     val smsHash = buildSmsHash(parsed.rawSender, parsed.rawMessage, timestamp)
                                     if (repository.getSmsTransactionByHash(smsHash) == null) {
                                         val account = findOrCreateAccount(parsed.accountName)
-                                        val merchantKey = MerchantKey.normalize(parsed.counterparty)
-                                        val categoryId = merchantKey.takeIf { it.isNotEmpty() }
+                                        val merchantKey = MerchantKey.bestMatch(
+                                            MerchantKey.normalize(parsed.counterparty),
+                                            importRuleKeys
+                                        )
+                                        val categoryId = merchantKey
                                             ?.let { repository.getMerchantRule(it) }
                                             ?.categoryId ?: 0L
                                         val txType = if (parsed.type == "credit") TransactionType.INCOME else TransactionType.EXPENSE

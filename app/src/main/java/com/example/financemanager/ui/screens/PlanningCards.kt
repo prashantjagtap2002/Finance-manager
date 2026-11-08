@@ -83,10 +83,11 @@ fun ForecastCard(forecast: CashForecast, privacy: Boolean, onOpenBudget: () -> U
 
             Spacer(modifier = Modifier.height(12.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ForecastFigure("Everyday", "−" + moneyString(forecast.projectedEverydaySpend, privacy, decimals = 0),
+                ForecastFigure("Everyday", moneyString(-forecast.projectedEverydaySpend, privacy, decimals = 0),
                     "${moneyString(forecast.dailyPace, privacy, decimals = 0)}/day")
-                ForecastFigure("Bills", "−" + moneyString(forecast.upcomingBills, privacy, decimals = 0), "scheduled")
-                ForecastFigure("Income", "+" + moneyString(forecast.upcomingIncome, privacy, decimals = 0), "expected")
+                // Negated through moneyString, which signs only non-zero amounts: "−₹0" read as a debt.
+                ForecastFigure("Bills", moneyString(-forecast.upcomingBills, privacy, decimals = 0), "scheduled")
+                ForecastFigure("Income", (if (forecast.upcomingIncome >= 0.5 && !privacy) "+" else "") + moneyString(forecast.upcomingIncome, privacy, decimals = 0), "expected")
             }
 
             Spacer(modifier = Modifier.height(12.dp))
@@ -114,8 +115,13 @@ fun ForecastCard(forecast: CashForecast, privacy: Boolean, onOpenBudget: () -> U
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            if (env.runsOutAt <= now) "Already over"
-                            else "Runs out ~${formatDate(env.runsOutAt, "d MMM")}",
+                            // Spent exactly to the limit is used up, not over: EMI at ₹1,930 of
+                            // ₹1,930 read "Already over" beside a Budget card saying "₹0.00 left".
+                            when {
+                                env.spent - env.limit > com.example.financemanager.domain.Money.EPSILON -> "Already over"
+                                env.runsOutAt <= now -> "Used up"
+                                else -> "Runs out ~${formatDate(env.runsOutAt, "d MMM")}"
+                            },
                             style = Typography.labelMedium.copy(
                                 color = if (env.runsOutAt <= now) AlertRed else WarningAmber,
                                 fontWeight = FontWeight.SemiBold

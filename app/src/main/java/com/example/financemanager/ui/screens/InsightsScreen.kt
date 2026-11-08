@@ -685,7 +685,9 @@ fun InsightsScreen(
                                                         maxLines = 1
                                                     )
                                                     Text(
-                                                        "${moneyString(item.amount)} (${percent.toInt()}%)",
+                                                        // Rounded, with "<1%" for a real but tiny share: truncating showed ₹80 of
+                                                        // ₹10,525 as "0%", as if the category had nothing in it.
+                                                        "${moneyString(item.amount)} (${if (percent > 0.0 && percent < 0.5) "<1" else kotlin.math.round(percent).toInt().toString()}%)",
                                                         style = TextStyle(color = TextSecondary, fontSize = 10.sp)
                                                     )
                                                 }
